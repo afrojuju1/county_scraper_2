@@ -1241,6 +1241,451 @@ def dallas_normalize_mongodb(ctx, sample_size, batch_id, mongo_uri, database):
 
 
 @cli.command()
+@click.option('--sample-size', type=int, default=100, help='Number of random properties to display')
+@click.option('--county', help='Filter by specific county (harris, travis, dallas)')
+@click.option('--format', 'output_format', type=click.Choice(['table', 'detailed', 'stats']), 
+              default='table', help='Output format')
+@click.option('--mongo-uri', help='MongoDB connection URI (overrides environment)')
+@click.option('--database', help='MongoDB database name (overrides environment)')
+@click.pass_context
+def view_properties(ctx, sample_size, county, output_format, mongo_uri, database):
+    """View random sample of properties from the unified database."""
+    console = ctx.obj['console']
+    
+    try:
+        from ..services import MongoDBService
+        mongodb = MongoDBService(mongo_uri=mongo_uri, database=database)
+        
+        if not mongodb.connect():
+            raise click.ClickException("Failed to connect to MongoDB")
+        
+        try:
+            console.print(f"[bold blue]🏠 Property Database Viewer[/bold blue]")
+            console.print(f"Sampling {sample_size:,} random properties{f' from {county.title()} County' if county else ' from all counties'}")
+            
+            # Build query filter
+            query = {}
+            if county:
+                query['county'] = county.lower()
+            
+            # Get random sample using MongoDB aggregation
+            pipeline = [
+                {'$match': query},
+                {'$sample': {'size': sample_size}}
+            ]
+            
+            properties = list(mongodb.properties_collection.aggregate(pipeline))
+            
+            if not properties:
+                console.print("[red]No properties found matching criteria[/red]")
+                return
+            
+            console.print(f"[green]✅ Found {len(properties):,} properties[/green]\n")
+            
+            if output_format == 'stats':
+                _display_property_stats(console, properties)
+            elif output_format == 'detailed':
+                _display_detailed_properties(console, properties)
+            else:  # table format
+                _display_property_table(console, properties)
+                
+        finally:
+            mongodb.disconnect()
+            
+    except Exception as e:
+        console.print(f"[red]Error viewing properties: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+def _display_property_table(console: Console, properties: list):
+    """Display properties in a table format."""
+    from rich.table import Table
+    
+    table = Table(title="🏠 Multi-County Property Sample", show_header=True, header_style="bold blue")
+    table.add_column("County", style="cyan", width=8)
+    table.add_column("Account ID", style="yellow", width=18)
+    table.add_column("Owner", style="green", width=25)
+    table.add_column("Address", style="magenta", width=30)
+    table.add_column("Market Value", justify="right", style="white", width=12)
+    table.add_column("Tax Entities", justify="center", style="blue", width=10)
+    
+    for prop in properties[:50]:  # Limit to 50 for readability
+        county = prop.get('county', 'unknown').title()
+        account_id = prop.get('account_id', 'N/A')
+        
+        # Get owner name
+        owner_name = "Unknown Owner"
+        if prop.get('mailing_address', {}).get('name'):
+            owner_name = prop['mailing_address']['name'][:22] + "..." if len(prop['mailing_address']['name']) > 22 else prop['mailing_address']['name']
+        
+        # Get property address
+        address = "No Address"
+        if prop.get('property_address', {}).get('street_address'):
+            street = prop['property_address']['street_address']
+            city = prop['property_address'].get('city', '')
+            if city:
+                address = f"{street}, {city}"[:28] + "..." if len(f"{street}, {city}") > 28 else f"{street}, {city}"
+            else:
+                address = street[:28] + "..." if len(street) > 28 else street
+        
+        # Get market value
+        market_value = 0
+        valuation = prop.get('valuation', {})
+        if valuation.get('market_value'):
+            market_value = int(valuation['market_value'])
+        elif valuation.get('total_value'):
+            market_value = int(valuation['total_value'])
+        
+        value_str = f"${market_value:,}" if market_value > 0 else "$0"
+        
+        # Get tax entities count
+        tax_entities_count = len(prop.get('tax_entities', []))
+        
+        table.add_row(
+            county,
+            account_id,
+            owner_name,
+            address,
+            value_str,
+            str(tax_entities_count) if tax_entities_count > 0 else "-"
+        )
+    
+    console.print(table)
+    
+    if len(properties) > 50:
+        console.print(f"\n[yellow]📝 Showing first 50 of {len(properties):,} properties[/yellow]")
+
+
+def _display_detailed_properties(console: Console, properties: list):
+    """Display properties in detailed format."""
+    for i, prop in enumerate(properties[:10], 1):  # Show first 10 in detail
+        console.print(f"\n[bold cyan]🏠 Property {i}: {prop.get('account_id', 'Unknown')}[/bold cyan]")
+        console.print(f"[blue]County:[/blue] {prop.get('county', 'unknown').title()}")
+        
+        # Owner info
+        mailing = prop.get('mailing_address', {})
+        if mailing.get('name'):
+            console.print(f"[green]Owner:[/green] {mailing['name']}")
+            if mailing.get('city') and mailing.get('state'):
+                console.print(f"[green]Mailing:[/green] {mailing.get('city', '')}, {mailing.get('state', '')}")
+        
+        # Property address
+        prop_addr = prop.get('property_address', {})
+        if prop_addr.get('street_address'):
+            address_parts = [prop_addr.get('street_address', '')]
+            if prop_addr.get('city'):
+                address_parts.append(prop_addr['city'])
+            if prop_addr.get('zip_code'):
+                address_parts.append(prop_addr['zip_code'])
+            console.print(f"[magenta]Address:[/magenta] {', '.join(address_parts)}")
+        
+        # Valuation
+        valuation = prop.get('valuation', {})
+        if valuation:
+            market_val = valuation.get('market_value') or valuation.get('total_value', 0)
+            if market_val:
+                console.print(f"[yellow]Value:[/yellow] ${int(market_val):,}")
+            
+            land_val = valuation.get('land_value', 0)
+            if land_val:
+                console.print(f"[yellow]Land:[/yellow] ${int(land_val):,}")
+        
+        # Tax entities
+        tax_entities = prop.get('tax_entities', [])
+        if tax_entities:
+            console.print(f"[blue]Tax Entities ({len(tax_entities)}):[/blue]")
+            for entity in tax_entities[:3]:  # Show first 3
+                name = entity.get('entity_name', 'Unknown')
+                value = entity.get('taxable_value', 0)
+                console.print(f"  • {name}: ${int(value):,}" if value else f"  • {name}")
+        
+        # Property details
+        prop_details = prop.get('property_details', {})
+        interesting_details = []
+        if prop_details.get('year_built'):
+            interesting_details.append(f"Built: {prop_details['year_built']}")
+        if prop_details.get('living_area_sf'):
+            interesting_details.append(f"Living Area: {prop_details['living_area_sf']:,} sq ft")
+        if prop_details.get('num_bedrooms'):
+            interesting_details.append(f"Bedrooms: {prop_details['num_bedrooms']}")
+        
+        if interesting_details:
+            console.print(f"[white]Details:[/white] {', '.join(interesting_details)}")
+
+
+def _display_property_stats(console: Console, properties: list):
+    """Display statistical summary of properties."""
+    from collections import Counter
+    
+    console.print(f"[bold green]📊 Property Statistics ({len(properties):,} properties)[/bold green]\n")
+    
+    # County distribution
+    counties = Counter(prop.get('county', 'unknown') for prop in properties)
+    console.print("[bold blue]🏛️ County Distribution:[/bold blue]")
+    for county, count in counties.most_common():
+        percentage = (count / len(properties)) * 100
+        console.print(f"  {county.title()}: {count:,} ({percentage:.1f}%)")
+    
+    # Value statistics
+    values = []
+    for prop in properties:
+        valuation = prop.get('valuation', {})
+        val = valuation.get('market_value') or valuation.get('total_value', 0)
+        if val and val > 0:
+            values.append(int(val))
+    
+    if values:
+        console.print(f"\n[bold yellow]💰 Property Values:[/bold yellow]")
+        console.print(f"  Properties with values: {len(values):,}/{len(properties):,}")
+        console.print(f"  Average: ${sum(values) // len(values):,}")
+        console.print(f"  Median: ${sorted(values)[len(values)//2]:,}")
+        console.print(f"  Range: ${min(values):,} - ${max(values):,}")
+    
+    # Tax entities statistics
+    tax_entity_counts = [len(prop.get('tax_entities', [])) for prop in properties]
+    if tax_entity_counts:
+        avg_entities = sum(tax_entity_counts) / len(tax_entity_counts)
+        console.print(f"\n[bold blue]🏛️ Tax Entities:[/bold blue]")
+        console.print(f"  Average per property: {avg_entities:.1f}")
+        console.print(f"  Range: {min(tax_entity_counts)} - {max(tax_entity_counts)}")
+    
+    # Property types (if available)
+    prop_types = []
+    years_built = []
+    
+    for prop in properties:
+        details = prop.get('property_details', {})
+        
+        # Property type from division code or other indicators
+        if details.get('division_code'):
+            prop_types.append(details['division_code'])
+        elif details.get('property_type'):
+            prop_types.append(details['property_type'])
+        
+        # Year built
+        if details.get('year_built') and details['year_built'] > 0:
+            years_built.append(details['year_built'])
+    
+    if prop_types:
+        type_counts = Counter(prop_types)
+        console.print(f"\n[bold cyan]🏠 Property Types:[/bold cyan]")
+        for prop_type, count in type_counts.most_common(5):
+            console.print(f"  {prop_type}: {count:,}")
+    
+    if years_built:
+        avg_year = sum(years_built) / len(years_built)
+        console.print(f"\n[bold green]📅 Building Ages:[/bold green]")
+        console.print(f"  Average year built: {avg_year:.0f}")
+        console.print(f"  Oldest: {min(years_built)}")
+        console.print(f"  Newest: {max(years_built)}")
+
+
+@cli.command()
+@click.option('--mongo-uri', help='MongoDB connection URI (overrides environment)')
+@click.option('--database', help='MongoDB database name (overrides environment)')
+@click.pass_context
+def fix_harris_county(ctx, mongo_uri, database):
+    """Fix existing Harris County records to set county field properly."""
+    console = ctx.obj['console']
+    
+    try:
+        from ..services import MongoDBService
+        mongodb = MongoDBService(mongo_uri=mongo_uri, database=database)
+        
+        if not mongodb.connect():
+            raise click.ClickException("Failed to connect to MongoDB")
+        
+        try:
+            console.print("[blue]🔧 Fixing Harris County records...[/blue]")
+            
+            # Count records without county field (these are the old Harris County records)
+            count_missing = mongodb.properties_collection.count_documents({'county': {'$exists': False}})
+            console.print(f"Found {count_missing:,} records without county field (Harris County)")
+            
+            if count_missing == 0:
+                console.print("[green]✅ No records need fixing - all have county field set![/green]")
+                return
+            
+            # Update all records without a county field to 'harris'
+            result = mongodb.properties_collection.update_many(
+                {'county': {'$exists': False}},  # Records without county field
+                {'$set': {'county': 'harris'}}   # Set county to harris
+            )
+            
+            console.print(f"[green]✅ Updated {result.modified_count:,} Harris County records[/green]")
+            
+            # Verify the fix by checking updated distribution
+            pipeline = [{'$group': {'_id': '$county', 'count': {'$sum': 1}}}]
+            county_counts = list(mongodb.properties_collection.aggregate(pipeline))
+            
+            console.print(f"\n[bold blue]🏛️ Updated County Distribution:[/bold blue]")
+            total_count = 0
+            for county_data in sorted(county_counts, key=lambda x: x['_id']):
+                count = county_data['count']
+                total_count += count
+                console.print(f"  {county_data['_id'].title()}: {count:,} properties")
+            
+            console.print(f"\n[bold green]🎉 All {total_count:,} properties now have county field set![/bold green]")
+            
+        finally:
+            mongodb.disconnect()
+            
+    except Exception as e:
+        console.print(f"[red]Error fixing Harris County records: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--mongo-uri', help='MongoDB connection URI (overrides environment)')
+@click.option('--database', help='MongoDB database name (overrides environment)')
+@click.pass_context
+def fix_harris_addresses(ctx, mongo_uri, database):
+    """Fix Harris County records to add street_address field from full_address."""
+    console = ctx.obj['console']
+    
+    try:
+        from ..services import MongoDBService
+        mongodb = MongoDBService(mongo_uri=mongo_uri, database=database)
+        
+        if not mongodb.connect():
+            raise click.ClickException("Failed to connect to MongoDB")
+        
+        try:
+            console.print("[blue]🔧 Fixing Harris County address fields...[/blue]")
+            
+            # Count Harris County records that need the street_address field added
+            count_missing = mongodb.properties_collection.count_documents({
+                'county': 'harris',
+                'property_address.street_address': {'$exists': False}
+            })
+            console.print(f"Found {count_missing:,} Harris County records missing street_address field")
+            
+            if count_missing == 0:
+                console.print("[green]✅ No records need fixing - all have street_address field![/green]")
+                return
+            
+            # Get Harris County records that need fixing
+            records_to_fix = list(mongodb.properties_collection.find(
+                {
+                    'county': 'harris',
+                    'property_address.street_address': {'$exists': False}
+                },
+                {'_id': 1, 'property_address.full_address': 1}
+            ))
+            
+            # Update each record to copy full_address to street_address
+            updated_count = 0
+            for record in records_to_fix:
+                full_address = record.get('property_address', {}).get('full_address')
+                if full_address:
+                    mongodb.properties_collection.update_one(
+                        {'_id': record['_id']},
+                        {'$set': {'property_address.street_address': full_address}}
+                    )
+                    updated_count += 1
+            
+            class UpdateResult:
+                def __init__(self, modified_count):
+                    self.modified_count = modified_count
+            
+            result = UpdateResult(updated_count)
+            
+            console.print(f"[green]✅ Updated {result.modified_count:,} Harris County address records[/green]")
+            
+            # Test that addresses are now visible
+            sample_properties = list(mongodb.properties_collection.find(
+                {'county': 'harris', 'property_address.street_address': {'$ne': None}}, 
+                {'property_address': 1, 'account_id': 1}
+            ).limit(3))
+            
+            if sample_properties:
+                console.print(f"\n[bold blue]✅ Sample Fixed Addresses:[/bold blue]")
+                for prop in sample_properties:
+                    addr = prop.get('property_address', {})
+                    street = addr.get('street_address', 'N/A')
+                    city = addr.get('city', 'N/A') 
+                    console.print(f"  {prop['account_id']}: {street}, {city}")
+            
+        finally:
+            mongodb.disconnect()
+            
+    except Exception as e:
+        console.print(f"[red]Error fixing Harris County addresses: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--mongo-uri', help='MongoDB connection URI (overrides environment)')
+@click.option('--database', help='MongoDB database name (overrides environment)')
+@click.pass_context
+def fix_harris_market_values(ctx, mongo_uri, database):
+    """Fix Harris County records to add market_value field from total_market_value."""
+    console = ctx.obj['console']
+    
+    try:
+        from ..services import MongoDBService
+        mongodb = MongoDBService(mongo_uri=mongo_uri, database=database)
+        
+        if not mongodb.connect():
+            raise click.ClickException("Failed to connect to MongoDB")
+        
+        try:
+            console.print("[blue]🔧 Fixing Harris County market value fields...[/blue]")
+            
+            # Count Harris County records that need the market_value field added
+            count_missing = mongodb.properties_collection.count_documents({
+                'county': 'harris',
+                'valuation.market_value': {'$exists': False}
+            })
+            console.print(f"Found {count_missing:,} Harris County records missing market_value field")
+            
+            if count_missing == 0:
+                console.print("[green]✅ No records need fixing - all have market_value field![/green]")
+                return
+            
+            # Get Harris County records that need fixing
+            records_to_fix = list(mongodb.properties_collection.find(
+                {
+                    'county': 'harris',
+                    'valuation.market_value': {'$exists': False}
+                },
+                {'_id': 1, 'valuation.total_market_value': 1}
+            ))
+            
+            # Update each record to copy total_market_value to market_value
+            updated_count = 0
+            for record in records_to_fix:
+                total_market_val = record.get('valuation', {}).get('total_market_value')
+                if total_market_val is not None:
+                    mongodb.properties_collection.update_one(
+                        {'_id': record['_id']},
+                        {'$set': {'valuation.market_value': total_market_val}}
+                    )
+                    updated_count += 1
+            
+            console.print(f"[green]✅ Updated {updated_count:,} Harris County market value records[/green]")
+            
+            # Test that market values are now visible
+            sample_properties = list(mongodb.properties_collection.find(
+                {'county': 'harris', 'valuation.market_value': {'$gt': 0}}, 
+                {'valuation.market_value': 1, 'account_id': 1}
+            ).limit(5))
+            
+            if sample_properties:
+                console.print(f"\n[bold blue]✅ Sample Fixed Market Values:[/bold blue]")
+                for prop in sample_properties:
+                    market_val = prop.get('valuation', {}).get('market_value', 0)
+                    console.print(f"  {prop['account_id']}: ${market_val:,}")
+            
+        finally:
+            mongodb.disconnect()
+            
+    except Exception as e:
+        console.print(f"[red]Error fixing Harris County market values: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
 @click.pass_context
 def info(ctx):
     """Display information about data files and configuration."""

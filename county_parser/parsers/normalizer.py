@@ -718,6 +718,7 @@ class CountyDataNormalizer(BaseParser):
             # Base property record
             property_record = {
                 "account_id": account_id,
+                "county": "harris",
                 "year": row.get("yr"),
                 "property_address": {
                     "street_number": row.get("str_num"),
@@ -726,6 +727,7 @@ class CountyDataNormalizer(BaseParser):
                     "street_suffix": row.get("str_sfx"),
                     "street_direction": row.get("str_sfx_dir"),
                     "unit": row.get("str_unit"),
+                    "street_address": row.get("site_addr_1"),  # Fixed: changed from full_address to street_address
                     "full_address": row.get("site_addr_1"),
                     "city": row.get("site_addr_2"),
                     "zip_code": row.get("site_addr_3")
@@ -764,7 +766,8 @@ class CountyDataNormalizer(BaseParser):
                     "agricultural_value": row.get("ag_val"),
                     "assessed_value": row.get("assessed_val"),
                     "total_appraised_value": row.get("tot_appr_val"),
-                    "total_market_value": row.get("tot_mkt_val"),
+                    "market_value": row.get("tot_mkt_val"),  # Fixed: changed from total_market_value to market_value
+                    "total_market_value": row.get("tot_mkt_val"),  # Keep both for compatibility
                     "new_construction_value": row.get("new_construction_val"),
                     "total_rcn_value": row.get("tot_rcn_val"),
                     "prior_values": {
