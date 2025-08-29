@@ -7,6 +7,7 @@ from rich.table import Table
 
 from ..models import Config
 from ..parsers import RealAccountsParser, OwnersParser, CountyDataNormalizer
+from ..parsers.travis_normalizer import TravisCountyNormalizer
 from ..utils.data_validator import DataQualityValidator
 from ..services import MongoDBService
 
@@ -626,6 +627,384 @@ def clean_mongodb(ctx, mongo_uri, database, confirm):
             
     except Exception as e:
         console.print(f"[red]Error cleaning MongoDB: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.pass_context
+def travis_diagnose(ctx):
+    """Diagnose Travis County data files and structure."""
+    console = ctx.obj['console']
+    
+    try:
+        # Create Travis County config
+        from ..models.config import Config
+        travis_config = Config()
+        
+        console.print("[bold blue]🏛️ Travis County Data Diagnostics[/bold blue]")
+        console.print(f"Data directory: {travis_config.data_dir}")
+        
+        # Initialize Travis normalizer
+        normalizer = TravisCountyNormalizer(travis_config)
+        
+        # Run diagnostics
+        results = normalizer.diagnose_files()
+        
+        # Display results
+        table = Table(title="Travis County File Analysis")
+        table.add_column("File Type", style="bold")
+        table.add_column("Status")
+        table.add_column("Size (MB)")
+        table.add_column("Records")
+        table.add_column("Format")
+        
+        for file_type, info in results.items():
+            status = "✅" if info['status'] == 'available' else "❌"
+            size_mb = str(info.get('size_mb', 'N/A'))
+            records = f"{info.get('line_count', 0):,}" if info.get('line_count') else 'N/A'
+            format_type = info.get('format', 'unknown')
+            
+            table.add_row(
+                file_type.replace('_', ' ').title(),
+                f"{status} {info['status']}",
+                size_mb,
+                records,
+                format_type
+            )
+        
+        console.print(table)
+        
+        # Show sample data for main files
+        console.print("\n[bold]Sample Records:[/bold]")
+        
+        main_files = ['properties', 'property_entities', 'improvements']
+        for file_type in main_files:
+            if file_type in results and results[file_type]['status'] == 'available':
+                info = results[file_type]
+                console.print(f"\n[bold cyan]{file_type.replace('_', ' ').title()}:[/bold cyan]")
+                console.print(f"Line Length: {info.get('line_length', 'N/A')} chars")
+                
+                if 'sample_lines' in info and info['sample_lines']:
+                    console.print("Sample:")
+                    for i, line in enumerate(info['sample_lines'][:2]):
+                        console.print(f"  {i+1}: {line[:100]}{'...' if len(line) > 100 else ''}")
+        
+    except Exception as e:
+        console.print(f"[red]Error during Travis diagnostics: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--file-type', type=click.Choice([
+    'properties', 'property_entities', 'improvements', 'improvement_attributes',
+    'land_details', 'improvement_info', 'agents', 'subdivisions'
+]), default='properties', help='File type to analyze in detail')
+@click.pass_context
+def travis_analyze(ctx, file_type):
+    """Analyze a specific Travis County file in detail."""
+    console = ctx.obj['console']
+    
+    try:
+        from ..models.config import Config
+        travis_config = Config()
+        normalizer = TravisCountyNormalizer(travis_config)
+        
+        console.print(f"[bold blue]🔍 Analyzing Travis County {file_type.replace('_', ' ').title()}[/bold blue]")
+        
+        info = normalizer.get_file_info(file_type)
+        
+        if 'error' in info:
+            console.print(f"[red]Error: {info['error']}[/red]")
+            return
+        
+        # Display detailed info
+        console.print(f"File: {info['path']}")
+        console.print(f"Size: {info['size_mb']} MB")
+        
+        if 'line_lengths' in info:
+            lengths = info['line_lengths']
+            console.print(f"Line lengths: min={lengths['min']}, max={lengths['max']}, avg={lengths['avg']}")
+        
+        if 'sample_records' in info:
+            console.print("\n[bold]Sample Records (first 3):[/bold]")
+            for i, record in enumerate(info['sample_records']):
+                console.print(f"\n[cyan]Record {i+1}:[/cyan]")
+                console.print(f"Length: {len(record)} chars")
+                console.print(f"Content: {record}")
+        
+        console.print(f"\n[yellow]Analysis: {info.get('analysis', 'No analysis available')}[/yellow]")
+        
+    except Exception as e:
+        console.print(f"[red]Error analyzing {file_type}: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--sample-size', type=int, default=100, help='Number of records to process')
+@click.option('--output-file', '-o', type=click.Path(), help='Output JSON file path (optional)')
+@click.pass_context
+def travis_normalize_sample(ctx, sample_size, output_file):
+    """Load and normalize a sample of Travis County data."""
+    console = ctx.obj['console']
+    
+    try:
+        from ..models.config import Config
+        travis_config = Config()
+        normalizer = TravisCountyNormalizer(travis_config)
+        
+        console.print(f"[bold blue]🏛️ Travis County Sample Normalization[/bold blue]")
+        console.print(f"Sample size: {sample_size:,} properties")
+        
+        # Load and normalize sample
+        normalized_records = normalizer.load_and_normalize_sample(sample_size)
+        
+        if not normalized_records:
+            console.print("[red]No records were normalized[/red]")
+            return
+        
+        # Show sample record structure
+        sample_record = normalized_records[0]
+        console.print("\n[bold cyan]Sample Record Structure:[/bold cyan]")
+        
+        def print_dict_structure(d, indent=0):
+            for key, value in d.items():
+                if isinstance(value, dict):
+                    console.print("  " * indent + f"• {key}:")
+                    print_dict_structure(value, indent + 1)
+                elif isinstance(value, list):
+                    console.print("  " * indent + f"• {key}: [{len(value)} items]")
+                    if value and isinstance(value[0], dict):
+                        console.print("  " * (indent + 1) + f"  Sample item keys: {list(value[0].keys())}")
+                else:
+                    console.print("  " * indent + f"• {key}: {type(value).__name__}")
+        
+        print_dict_structure(sample_record)
+        
+        # Save to file if requested
+        if output_file:
+            output_path = Path(output_file)
+            normalizer.save_sample_output(normalized_records, output_path)
+        
+        # Compare with Harris model
+        comparison = normalizer.compare_with_harris_model(normalized_records)
+        
+        console.print("\n[bold green]📊 Model Comparison Analysis:[/bold green]")
+        
+        if comparison['common_fields']:
+            console.print(f"✅ Common fields: {len(comparison['common_fields'])}")
+            console.print(f"   {', '.join(comparison['common_fields'])}")
+        
+        if comparison['travis_unique_fields']:
+            console.print(f"\n🆕 Travis-specific fields: {len(comparison['travis_unique_fields'])}")
+            console.print(f"   {', '.join(comparison['travis_unique_fields'])}")
+        
+        if comparison['harris_missing_fields']:
+            console.print(f"\n❓ Missing from Travis: {len(comparison['harris_missing_fields'])}")
+            console.print(f"   {', '.join(comparison['harris_missing_fields'])}")
+        
+        if comparison['recommendations']:
+            console.print("\n[bold yellow]💡 Recommendations:[/bold yellow]")
+            for rec in comparison['recommendations']:
+                console.print(f"   • {rec}")
+        
+        # Data coverage summary
+        high_coverage = [
+            field for field, info in comparison['data_coverage'].items() 
+            if info['coverage_percentage'] >= 80
+        ]
+        if high_coverage:
+            console.print(f"\n[green]📈 High data coverage fields (≥80%):[/green]")
+            console.print(f"   {', '.join(high_coverage)}")
+        
+        console.print(f"\n[bold green]✅ Successfully processed {len(normalized_records):,} Travis County records![/bold green]")
+        
+    except Exception as e:
+        console.print(f"[red]Error during Travis normalization: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--sample-size', type=int, default=50, help='Number of records to compare')
+@click.pass_context  
+def compare_counties(ctx, sample_size):
+    """Compare data structures between Harris and Travis counties."""
+    console = ctx.obj['console']
+    
+    try:
+        console.print("[bold blue]🔄 Comparing Harris vs Travis County Data Models[/bold blue]")
+        
+        # Load Travis sample
+        from ..models.config import Config
+        travis_config = Config()
+        travis_normalizer = TravisCountyNormalizer(travis_config)
+        
+        console.print(f"Loading {sample_size} Travis County records...")
+        travis_records = travis_normalizer.load_and_normalize_sample(sample_size)
+        
+        # Load Harris sample (if available)
+        harris_config = Config()
+        harris_normalizer = CountyDataNormalizer(harris_config)
+        
+        console.print(f"Loading {sample_size} Harris County records...")
+        try:
+            # Try to load Harris sample
+            real_accounts_df = harris_normalizer._load_real_accounts(sample_size=sample_size)
+            owners_df = harris_normalizer._load_owners()
+            deeds_df = harris_normalizer._load_deeds()
+            permits_df = harris_normalizer._load_permits()
+            tieback_df = harris_normalizer._load_parcel_tieback()
+            neighborhood_df = harris_normalizer._load_neighborhood_codes()
+            mineral_df = harris_normalizer._load_mineral_rights()
+            
+            harris_records = harris_normalizer._create_json_normalized_data(
+                real_accounts_df, owners_df, deeds_df, permits_df,
+                tieback_df, neighborhood_df, mineral_df
+            )[:sample_size]  # Limit to sample size
+            
+        except Exception as e:
+            console.print(f"[yellow]⚠️ Could not load Harris County data: {e}[/yellow]")
+            harris_records = []
+        
+        # Create comparison table
+        from rich.table import Table
+        
+        comparison_table = Table(title="County Data Model Comparison")
+        comparison_table.add_column("Field", style="bold")
+        comparison_table.add_column("Travis County", style="cyan")
+        comparison_table.add_column("Harris County", style="green")
+        comparison_table.add_column("Coverage", style="yellow")
+        
+        # Analyze Travis structure
+        if travis_records:
+            travis_sample = travis_records[0]
+            travis_fields = set(travis_sample.keys())
+            
+            # Get Harris structure
+            harris_fields = set()
+            if harris_records:
+                harris_sample = harris_records[0]
+                harris_fields = set(harris_sample.keys())
+            
+            all_fields = travis_fields.union(harris_fields)
+            
+            for field in sorted(all_fields):
+                travis_has = "✅" if field in travis_fields else "❌"
+                harris_has = "✅" if field in harris_fields else "❌"
+                
+                # Calculate coverage for Travis
+                if travis_records and field in travis_fields:
+                    coverage = sum(1 for r in travis_records if r.get(field) is not None)
+                    coverage_pct = f"{(coverage/len(travis_records)*100):.1f}%"
+                else:
+                    coverage_pct = "N/A"
+                
+                comparison_table.add_row(field, travis_has, harris_has, coverage_pct)
+            
+            console.print(comparison_table)
+        
+        # Summary statistics
+        console.print(f"\n[bold]Summary:[/bold]")
+        console.print(f"Travis records loaded: {len(travis_records):,}")
+        console.print(f"Harris records loaded: {len(harris_records):,}")
+        
+        if travis_records and harris_records:
+            common_fields = travis_fields.intersection(harris_fields)
+            travis_unique = travis_fields - harris_fields  
+            harris_unique = harris_fields - travis_fields
+            
+            console.print(f"Common fields: {len(common_fields)}")
+            console.print(f"Travis-only fields: {len(travis_unique)}")
+            console.print(f"Harris-only fields: {len(harris_unique)}")
+            
+            if travis_unique:
+                console.print(f"\n[cyan]Travis-specific: {', '.join(sorted(travis_unique))}[/cyan]")
+            if harris_unique:
+                console.print(f"\n[green]Harris-specific: {', '.join(sorted(harris_unique))}[/green]")
+        
+    except Exception as e:
+        console.print(f"[red]Error during comparison: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--sample-size', type=int, default=10000, help='Number of records to process')
+@click.option('--batch-id', help='Custom batch ID for MongoDB storage')
+@click.option('--mongo-uri', help='MongoDB connection URI (overrides environment)')
+@click.option('--database', help='MongoDB database name (overrides environment)')
+@click.pass_context
+def travis_normalize_mongodb(ctx, sample_size, batch_id, mongo_uri, database):
+    """Load and normalize Travis County data directly to MongoDB."""
+    console = ctx.obj['console']
+    
+    try:
+        from ..models.config import Config
+        travis_config = Config()
+        normalizer = TravisCountyNormalizer(travis_config)
+        
+        console.print(f"[bold blue]🏛️ Travis County → MongoDB Pipeline[/bold blue]")
+        console.print(f"Processing {sample_size:,} properties directly to MongoDB")
+        
+        # Load and normalize Travis data
+        console.print("[blue]📊 Loading and normalizing Travis County data...[/blue]")
+        normalized_records = normalizer.load_and_normalize_sample(sample_size)
+        
+        if not normalized_records:
+            console.print("[red]No records were normalized[/red]")
+            return
+        
+        console.print(f"[green]✅ Successfully normalized {len(normalized_records):,} records[/green]")
+        
+        # Save directly to MongoDB
+        from ..services import MongoDBService
+        mongodb = MongoDBService(mongo_uri=mongo_uri, database=database)
+        
+        if not mongodb.connect():
+            raise click.ClickException("Failed to connect to MongoDB")
+        
+        try:
+            result = mongodb.save_properties(
+                normalized_records, 
+                batch_id=batch_id or f"travis_batch_{len(normalized_records)}",
+                source_files=['PROP.TXT', 'PROP_ENT.TXT']
+            )
+            
+            console.print(f"\n[bold green]🎉 Successfully saved to MongoDB![/bold green]")
+            console.print(f"📊 Batch ID: {result['batch_id']}")
+            console.print(f"💾 Properties: {result['saved_count']:,}")
+            console.print(f"📅 Timestamp: {result['timestamp']}")
+            
+            # Show collection stats
+            stats = mongodb.get_collection_stats()
+            console.print(f"\n[blue]📈 Database Status:[/blue]")
+            console.print(f"   Total properties: {stats['properties_count']:,}")
+            console.print(f"   Processing logs: {stats['logs_count']:,}")
+            
+            # Show data summary
+            console.print(f"\n[bold cyan]📋 Travis County Data Summary:[/bold cyan]")
+            console.print(f"   • Account IDs: 12-digit format")
+            console.print(f"   • Tax Entities: {sum(len(r.get('tax_entities', [])) for r in normalized_records[:10]):,} (sample)")
+            console.print(f"   • Complete Owners: {len([r for r in normalized_records[:100] if r.get('owners')])}/100 (sample)")
+            console.print(f"   • Legal Descriptions: {len([r for r in normalized_records[:100] if r.get('property_details', {}).get('legal_description')])}/100 (sample)")
+            
+            # Data coverage analysis
+            sample_records = normalized_records[:100]  # Analyze first 100 for speed
+            high_coverage_fields = []
+            
+            for field in ['mailing_address', 'property_details', 'valuation', 'tax_entities']:
+                coverage = sum(1 for r in sample_records if r.get(field) and 
+                              (not isinstance(r[field], dict) or any(v for v in r[field].values() if v is not None)))
+                if coverage >= 80:  # 80% coverage threshold
+                    high_coverage_fields.append(f"{field} ({coverage}%)")
+            
+            if high_coverage_fields:
+                console.print(f"\n[green]📊 High Coverage Fields:[/green]")
+                console.print(f"   {', '.join(high_coverage_fields)}")
+            
+        finally:
+            mongodb.disconnect()
+            
+    except Exception as e:
+        console.print(f"[red]Error during Travis MongoDB processing: {e}[/red]")
         raise click.ClickException(str(e))
 
 
