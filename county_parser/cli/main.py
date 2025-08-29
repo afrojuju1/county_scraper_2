@@ -8,6 +8,7 @@ from rich.table import Table
 from ..models import Config
 from ..parsers import RealAccountsParser, OwnersParser, CountyDataNormalizer
 from ..parsers.travis_normalizer import TravisCountyNormalizer
+from ..parsers.dallas_normalizer import DallasCountyNormalizer
 from ..utils.data_validator import DataQualityValidator
 from ..services import MongoDBService
 
@@ -1005,6 +1006,237 @@ def travis_normalize_mongodb(ctx, sample_size, batch_id, mongo_uri, database):
             
     except Exception as e:
         console.print(f"[red]Error during Travis MongoDB processing: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.pass_context
+def dallas_diagnose(ctx):
+    """Diagnose Dallas County data files structure and quality."""
+    from ..models.config import Config
+    dallas_config = Config()
+    console = ctx.obj['console']
+    
+    try:
+        normalizer = DallasCountyNormalizer(dallas_config)
+        console.print("[bold blue]🏛️ Dallas County Data Diagnosis[/bold blue]\n")
+        
+        diagnostics = normalizer.diagnose_files()
+        
+        for file_name, info in diagnostics.items():
+            if info['status'] == 'ok':
+                console.print(f"[green]✅ {file_name.upper()}[/green]")
+                console.print(f"   📁 Size: {info['size_mb']:.1f} MB")
+                console.print(f"   📊 Est. Records: {info['estimated_rows']:,}")
+                console.print(f"   🔍 Columns: {len(info['columns'])}")
+                console.print(f"   📋 Fields: {', '.join(info['columns'][:8])}{'...' if len(info['columns']) > 8 else ''}")
+            elif info['status'] == 'missing':
+                console.print(f"[red]❌ {file_name.upper()} - Missing[/red]")
+                console.print(f"   📁 Expected: {info['path']}")
+            else:
+                console.print(f"[yellow]⚠️ {file_name.upper()} - Error[/yellow]")
+                console.print(f"   ❗ {info['error']}")
+            console.print()
+        
+        # Summary
+        total_files = len(diagnostics)
+        ok_files = sum(1 for info in diagnostics.values() if info['status'] == 'ok')
+        
+        console.print(f"[bold]📈 Summary: {ok_files}/{total_files} files ready[/bold]")
+        
+        if ok_files == total_files:
+            console.print("[green]🎉 All Dallas County files are ready for processing![/green]")
+        elif ok_files >= 4:  # Account info + appraisal are minimum
+            console.print("[yellow]⚠️ Some files missing but core files available[/yellow]")
+        else:
+            console.print("[red]❌ Missing critical files for processing[/red]")
+    
+    except Exception as e:
+        console.print(f"[red]Error during Dallas diagnosis: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--sample-size', type=int, default=100, help='Number of records to analyze')
+@click.pass_context
+def dallas_analyze(ctx, sample_size):
+    """Analyze Dallas County data structure in detail."""
+    from ..models.config import Config
+    dallas_config = Config()
+    console = ctx.obj['console']
+    
+    try:
+        console.print(f"[bold blue]🔍 Dallas County Deep Analysis ({sample_size:,} records)[/bold blue]\n")
+        
+        normalizer = DallasCountyNormalizer(dallas_config)
+        records = normalizer.load_and_normalize_sample(sample_size)
+        
+        if not records:
+            console.print("[red]No records were processed[/red]")
+            return
+        
+        # Analyze the structure
+        console.print(f"[bold green]📋 Dallas County Analysis Results:[/bold green]")
+        console.print(f"   Total Records: {len(records):,}")
+        
+        # Sample record structure
+        sample_record = records[0]
+        console.print(f"\n[bold cyan]🏗️ Unified Structure Preview:[/bold cyan]")
+        console.print(f"   Account ID Format: {sample_record['account_id']} (17-digit)")
+        console.print(f"   County: {sample_record['county']}")
+        console.print(f"   Tax Entities: {len(sample_record.get('tax_entities', []))}")
+        console.print(f"   Owner Info: {'✅' if sample_record.get('owners') else '❌'}")
+        console.print(f"   Property Address: {'✅' if sample_record.get('property_address', {}).get('street_address') else '❌'}")
+        console.print(f"   Valuation Data: {'✅' if sample_record.get('valuation', {}).get('total_value') else '❌'}")
+        
+        # Tax entities analysis
+        if records[0].get('tax_entities'):
+            console.print(f"\n[bold yellow]🏛️ Sample Tax Entities:[/bold yellow]")
+            for entity in records[0]['tax_entities'][:3]:
+                console.print(f"   • {entity['entity_name']} ({entity['entity_type']}): ${entity['taxable_value']:,}")
+        
+        # Property details coverage
+        property_types = {}
+        building_years = []
+        
+        for record in records[:50]:  # Sample analysis
+            prop_details = record.get('property_details', {})
+            division = prop_details.get('division_code', 'Unknown')
+            property_types[division] = property_types.get(division, 0) + 1
+            
+            year_built = prop_details.get('year_built')
+            if year_built and year_built > 0:
+                building_years.append(year_built)
+        
+        console.print(f"\n[bold magenta]🏠 Property Type Distribution (sample):[/bold magenta]")
+        for prop_type, count in property_types.items():
+            console.print(f"   {prop_type}: {count} properties")
+        
+        if building_years:
+            avg_year = sum(building_years) / len(building_years)
+            console.print(f"\n[bold green]📅 Average Building Year: {avg_year:.0f}[/bold green]")
+    
+    except Exception as e:
+        console.print(f"[red]Error during Dallas analysis: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--sample-size', type=int, default=1000, help='Number of records to process')
+@click.option('--output-file', type=click.Path(), help='Optional JSON output file')
+@click.pass_context
+def dallas_normalize_sample(ctx, sample_size, output_file):
+    """Load and normalize Dallas County data sample."""
+    from ..models.config import Config
+    dallas_config = Config()
+    console = ctx.obj['console']
+    
+    try:
+        normalizer = DallasCountyNormalizer(dallas_config)
+        
+        console.print(f"[bold blue]🏛️ Dallas County Sample Normalization[/bold blue]")
+        console.print(f"Processing {sample_size:,} properties")
+        
+        normalized_records = normalizer.load_and_normalize_sample(sample_size)
+        
+        if not normalized_records:
+            console.print("[red]No records were normalized[/red]")
+            return
+        
+        # Save to file if requested
+        if output_file:
+            from pathlib import Path
+            normalizer.save_sample_output(normalized_records, Path(output_file))
+        
+        # Display results
+        console.print(f"\n[bold green]🎉 Dallas County Normalization Complete![/bold green]")
+        console.print(f"   Records Processed: {len(normalized_records):,}")
+        console.print(f"   Account ID Format: 17-digit Dallas format")
+        console.print(f"   Unified JSON Structure: ✅")
+        
+        # Show sample data
+        sample = normalized_records[0]
+        console.print(f"\n[bold cyan]📋 Sample Record:[/bold cyan]")
+        console.print(f"   Account: {sample['account_id']}")
+        console.print(f"   Owner: {sample['mailing_address']['name'][:50]}...")
+        console.print(f"   Address: {sample['property_address']['street_address']}")
+        console.print(f"   Value: ${sample['valuation']['total_value']:,}")
+        console.print(f"   Tax Entities: {len(sample['tax_entities'])}")
+        
+        if output_file:
+            console.print(f"\n[green]💾 Saved to: {output_file}[/green]")
+    
+    except Exception as e:
+        console.print(f"[red]Error during Dallas normalization: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--sample-size', type=int, default=10000, help='Number of records to process')
+@click.option('--batch-id', help='Custom batch ID for MongoDB storage')
+@click.option('--mongo-uri', help='MongoDB connection URI (overrides environment)')
+@click.option('--database', help='MongoDB database name (overrides environment)')
+@click.pass_context
+def dallas_normalize_mongodb(ctx, sample_size, batch_id, mongo_uri, database):
+    """Load and normalize Dallas County data directly to MongoDB."""
+    console = ctx.obj['console']
+    
+    try:
+        from ..models.config import Config
+        dallas_config = Config()
+        normalizer = DallasCountyNormalizer(dallas_config)
+        
+        console.print(f"[bold blue]🏛️ Dallas County → MongoDB Pipeline[/bold blue]")
+        console.print(f"Processing {sample_size:,} properties directly to MongoDB")
+        
+        # Load and normalize Dallas data
+        console.print("[blue]📊 Loading and normalizing Dallas County data...[/blue]")
+        normalized_records = normalizer.load_and_normalize_sample(sample_size)
+        
+        if not normalized_records:
+            console.print("[red]No records were normalized[/red]")
+            return
+        
+        console.print(f"[green]✅ Successfully normalized {len(normalized_records):,} records[/green]")
+        
+        # Save directly to MongoDB
+        from ..services import MongoDBService
+        mongodb = MongoDBService(mongo_uri=mongo_uri, database=database)
+        
+        if not mongodb.connect():
+            raise click.ClickException("Failed to connect to MongoDB")
+        
+        try:
+            result = mongodb.save_properties(
+                normalized_records, 
+                batch_id=batch_id or f"dallas_batch_{len(normalized_records)}",
+                source_files=['ACCOUNT_INFO.CSV', 'ACCOUNT_APPRL_YEAR.CSV', 'MULTI_OWNER.CSV']
+            )
+            
+            console.print(f"\n[bold green]🎉 Successfully saved to MongoDB![/bold green]")
+            console.print(f"📊 Batch ID: {result['batch_id']}")
+            console.print(f"💾 Properties: {result['saved_count']:,}")
+            console.print(f"📅 Timestamp: {result['timestamp']}")
+            
+            # Show collection stats
+            stats = mongodb.get_collection_stats()
+            console.print(f"\n[blue]📈 Database Status:[/blue]")
+            console.print(f"   Total properties: {stats['properties_count']:,}")
+            console.print(f"   Processing logs: {stats['logs_count']:,}")
+            
+            # Show data summary
+            console.print(f"\n[bold cyan]📋 Dallas County Data Summary:[/bold cyan]")
+            console.print(f"   • Account IDs: 17-digit format")
+            console.print(f"   • Tax Entities: {sum(len(r.get('tax_entities', [])) for r in normalized_records[:10]):,} (sample)")
+            console.print(f"   • Multiple Owners: {len([r for r in normalized_records[:100] if len(r.get('owners', [])) > 1])}/100 (sample)")
+            console.print(f"   • Building Details: {len([r for r in normalized_records[:100] if r.get('property_details', {}).get('year_built')])}/100 (sample)")
+            console.print(f"   • Land Information: {len([r for r in normalized_records[:100] if r.get('property_details', {}).get('zoning')])}/100 (sample)")
+            
+        finally:
+            mongodb.disconnect()
+            
+    except Exception as e:
+        console.print(f"[red]Error during Dallas MongoDB processing: {e}[/red]")
         raise click.ClickException(str(e))
 
 
