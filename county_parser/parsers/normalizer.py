@@ -117,59 +117,9 @@ class CountyDataNormalizer(BaseParser):
         }
     
     def _load_real_accounts(self, sample_size: Optional[int] = None, use_chunking: bool = True) -> pl.DataFrame:
-        """Load and clean real accounts data."""
+        """Load and clean real accounts data with specialized line-ending handling."""
         file_path = self.config.get_file_path(self.config.real_accounts_file)
-        
-        # Detect delimiter first
-        delimiter = self._detect_delimiter(file_path)
-        self.console.print(f"📖 Reading file: {file_path.name} (delimiter: '{delimiter}')")
-        
-        try:
-            read_kwargs = {
-                "has_header": True,
-                "separator": delimiter,
-                "null_values": ["", "NULL", "null", "N/A", "n/a"],
-                "truncate_ragged_lines": True,
-                "ignore_errors": True,
-                "infer_schema_length": 0  # Don't infer schema, read all as strings
-            }
-            
-            if sample_size:
-                read_kwargs["n_rows"] = sample_size
-                
-            df = pl.read_csv(file_path, **read_kwargs)
-            
-        except Exception as e:
-            self.console.print(f"[yellow]Polars parsing failed, trying pandas fallback: {str(e)[:100]}...[/yellow]")
-            # Fallback: use pandas for messy CSV files
-            try:
-                import pandas as pd
-                
-                # Use pandas for robust CSV reading
-                pandas_df = pd.read_csv(
-                    file_path,
-                    sep="\t",
-                    nrows=sample_size if sample_size else None,
-                    dtype=str,  # Read all as strings
-                    na_values=["", "NULL", "null", "N/A", "n/a"],
-                    keep_default_na=False,  # Don't convert strings to NaN
-                    encoding='utf-8',
-                    on_bad_lines='skip'  # Skip problematic lines
-                )
-                
-                # Convert to polars
-                df = pl.from_pandas(pandas_df)
-                self.console.print(f"✅ Successfully read {len(df):,} rows using pandas fallback")
-                
-            except Exception as e2:
-                self.console.print(f"[red]Both polars and pandas failed: {e2}[/red]")
-                raise
-    
-        # Clean up the dataframe after loading (only if we have one)
-        if df is not None:
-            df = self._clean_dataframe(df)
-        
-        return df
+        return self._load_real_accounts_specialized(file_path, sample_size)
     
     def _detect_delimiter(self, file_path: Path) -> str:
         """Detect the delimiter used in the file."""
@@ -210,55 +160,450 @@ class CountyDataNormalizer(BaseParser):
         return df
     
     def _load_owners(self) -> pl.DataFrame:
-        """Load owners data.""" 
+        """Load owners data with specialized CRLF and encoding handling."""
         file_path = self.config.get_file_path(self.config.owners_file)
-        
-        try:
-            return pl.read_csv(file_path, separator="\t", has_header=True, ignore_errors=True)
-        except Exception as e:
-            self.console.print(f"[yellow]Using pandas fallback for owners.txt: {str(e)[:50]}...[/yellow]")
-            import pandas as pd
-            # Try different encodings
-            for encoding in ['utf-8', 'latin-1', 'cp1252']:
-                try:
-                    pandas_df = pd.read_csv(
-                        file_path, 
-                        sep="\t", 
-                        dtype=str, 
-                        on_bad_lines='skip',
-                        encoding=encoding,
-                        encoding_errors='ignore'
-                    )
-                    self.console.print(f"✅ Successfully loaded with {encoding} encoding")
-                    return pl.from_pandas(pandas_df)
-                except Exception:
-                    continue
-            raise Exception("Could not load file with any encoding")
+        return self._load_owners_specialized(file_path)
     
     def _load_deeds(self) -> pl.DataFrame:
         """Load deeds data.""" 
         file_path = self.config.get_file_path(self.config.deeds_file)
-        return pl.read_csv(file_path, separator="\t", has_header=True)
+        return self._robust_csv_load(file_path, "deeds.txt")
     
     def _load_permits(self) -> pl.DataFrame:
-        """Load permits data."""
+        """Load permits data with special handling for unescaped quotes."""
         file_path = self.config.get_file_path(self.config.permits_file)
-        return pl.read_csv(file_path, separator="\t", has_header=True)
+        return self._load_permits_specialized(file_path)
     
     def _load_parcel_tieback(self) -> pl.DataFrame:
         """Load parcel tieback relationships."""
         file_path = self.config.get_file_path(self.config.parcel_tieback_file)
-        return pl.read_csv(file_path, separator="\t", has_header=True)
+        return self._robust_csv_load(file_path, "parcel_tieback.txt")
     
     def _load_neighborhood_codes(self) -> pl.DataFrame:
         """Load neighborhood code lookup."""
         file_path = self.config.get_file_path("real_neighborhood_code.txt")
-        return pl.read_csv(file_path, separator="\t", has_header=True)
+        return self._robust_csv_load(file_path, "real_neighborhood_code.txt")
     
     def _load_mineral_rights(self) -> pl.DataFrame:
         """Load mineral rights data."""
         file_path = self.config.get_file_path("real_mnrl.txt")
-        return pl.read_csv(file_path, separator="\t", has_header=True)
+        return self._robust_csv_load(file_path, "real_mnrl.txt")
+    
+    def _robust_csv_load(self, file_path: Path, filename: str, sample_size: Optional[int] = None) -> pl.DataFrame:
+        """Robust CSV loading with comprehensive error handling and data quality validation."""
+        
+        original_file_size = file_path.stat().st_size / (1024 * 1024)  # Size in MB
+        
+        try:
+            # First try polars with strict settings
+            df = pl.read_csv(file_path, separator="\t", has_header=True, ignore_errors=True)
+            self.console.print(f"✅ {filename}: {len(df):,} rows loaded with polars")
+            return df
+            
+        except Exception as e:
+            self.console.print(f"[yellow]Polars failed for {filename}, using robust pandas parsing...[/yellow]")
+            import pandas as pd
+            
+            # Get expected row count from file
+            with open(file_path, 'rb') as f:
+                line_count = sum(1 for _ in f) - 1  # Subtract header
+                
+            self.console.print(f"📊 {filename}: {original_file_size:.1f}MB, ~{line_count:,} expected rows")
+            
+            best_df = None
+            best_row_count = 0
+            parsing_method = "none"
+            
+            # Advanced parsing strategies to handle embedded newlines and malformed data
+            strategies = [
+                {
+                    "name": "Multi-line aware parsing",
+                    "params": {
+                        "sep": "\t", "dtype": str, "encoding": "utf-8",
+                        "quoting": 1, "doublequote": True, "skipinitialspace": True,
+                        "on_bad_lines": "warn", "encoding_errors": "replace",
+                        "nrows": sample_size, "engine": "python"  # Python engine handles complex cases better
+                    }
+                },
+                {
+                    "name": "Fixed-width fallback", 
+                    "params": {
+                        "sep": "\t", "dtype": str, "encoding": "utf-8",
+                        "quoting": 3, "on_bad_lines": "skip", "engine": "python",
+                        "encoding_errors": "replace", "nrows": sample_size,
+                        "skip_blank_lines": True, "comment": None
+                    }
+                },
+                {
+                    "name": "Robust with line cleaning",
+                    "params": {
+                        "sep": "\t", "dtype": str, "encoding": "latin-1", 
+                        "quoting": 3, "on_bad_lines": "skip", "engine": "c",
+                        "nrows": sample_size, "low_memory": False
+                    }
+                },
+                {
+                    "name": "Minimal parsing (last resort)",
+                    "params": {
+                        "sep": "\t", "dtype": str, "encoding": "cp1252",
+                        "quoting": 3, "on_bad_lines": "skip", "engine": "python",
+                        "nrows": sample_size, "error_bad_lines": False,
+                        "warn_bad_lines": False  # Suppress warnings for this final attempt
+                    }
+                }
+            ]
+            
+            for strategy in strategies:
+                try:
+                    df = pd.read_csv(file_path, **strategy["params"])
+                    
+                    # Check data quality
+                    row_count = len(df)
+                    completeness = (line_count - row_count) / line_count if line_count > 0 else 0
+                    
+                    if row_count > best_row_count:
+                        best_df = df
+                        best_row_count = row_count
+                        parsing_method = strategy["name"]
+                    
+                    # Report quality metrics
+                    quality_icon = "✅" if completeness < 0.05 else "⚠️" if completeness < 0.15 else "❌"
+                    self.console.print(f"{quality_icon} {strategy['name']}: {row_count:,} rows ({completeness*100:.1f}% data loss)")
+                    
+                    # If we got >95% of expected rows, use this method
+                    if completeness < 0.05:
+                        break
+                        
+                except Exception as e:
+                    self.console.print(f"❌ {strategy['name']}: Failed - {str(e)[:50]}...")
+                    continue
+            
+            if best_df is None:
+                raise Exception(f"All parsing strategies failed for {filename}")
+            
+            # Final data quality report
+            final_completeness = (line_count - best_row_count) / line_count if line_count > 0 else 0
+            quality_score = "🟢 Excellent" if final_completeness < 0.02 else "🟡 Good" if final_completeness < 0.10 else "🔴 Poor"
+            
+            self.console.print(f"📋 {filename} Quality Report:")
+            self.console.print(f"   Method: {parsing_method}")
+            self.console.print(f"   Rows: {best_row_count:,} of {line_count:,} expected ({final_completeness*100:.1f}% loss)")
+            self.console.print(f"   Quality: {quality_score}")
+            
+            # Add metadata to track data quality (use setattr to avoid pandas warning)
+            setattr(best_df, '_parsing_metadata', {
+                "filename": filename,
+                "method": parsing_method,
+                "expected_rows": line_count,
+                "actual_rows": best_row_count,
+                "data_loss_pct": final_completeness * 100,
+                "file_size_mb": original_file_size
+            })
+            
+            return pl.from_pandas(best_df)
+    
+    def _load_permits_specialized(self, file_path: Path) -> pl.DataFrame:
+        """Specialized permits loader that handles unescaped quotes correctly."""
+        
+        self.console.print(f"🔧 Loading permits.txt with specialized quote handling...")
+        
+        import pandas as pd
+        
+        try:
+            # Strategy: Use QUOTE_NONE and handle the description field specially
+            df = pd.read_csv(
+                file_path,
+                sep='\t',
+                dtype=str,
+                encoding='utf-8',
+                quoting=3,  # QUOTE_NONE - ignore all quotes
+                on_bad_lines='skip',
+                encoding_errors='replace',
+                engine='python'  # Python engine handles edge cases better
+            )
+            
+            self.console.print(f"✅ Successfully loaded {len(df):,} permit records")
+            
+            # Clean up any residual quote issues in the description field
+            if 'dscr' in df.columns:
+                # Remove any stray quotes at the beginning or end of descriptions
+                df['dscr'] = df['dscr'].str.strip().str.strip('"').str.strip()
+                
+            return pl.from_pandas(df)
+            
+        except Exception as e:
+            self.console.print(f"❌ Specialized permits parser failed: {e}")
+            
+            # Final fallback: Read raw lines and parse manually
+            self.console.print("🔧 Using manual line parsing as final fallback...")
+            return self._parse_permits_manually(file_path)
+    
+    def _parse_permits_manually(self, file_path: Path) -> pl.DataFrame:
+        """Manual line-by-line parsing for severely malformed permits data."""
+        
+        import pandas as pd
+        
+        records = []
+        skipped_lines = 0
+        
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            # Read header
+            header_line = f.readline().strip()
+            headers = header_line.split('\t')
+            expected_cols = len(headers)
+            
+            self.console.print(f"📋 Expected {expected_cols} columns: {headers[:5]}...")
+            
+            # Process lines manually
+            for line_num, line in enumerate(f, start=2):
+                try:
+                    # Split on tabs
+                    fields = line.strip().split('\t')
+                    
+                    # Handle cases where we have the right number of fields
+                    if len(fields) == expected_cols:
+                        records.append(fields)
+                    elif len(fields) == expected_cols - 1:
+                        # Missing last field, add empty string
+                        fields.append('')
+                        records.append(fields)
+                    else:
+                        # Skip malformed lines
+                        skipped_lines += 1
+                        continue
+                        
+                except Exception:
+                    skipped_lines += 1
+                    continue
+                    
+                # Limit for testing
+                if len(records) >= 100000:  # Process first 100k records
+                    break
+        
+        if not records:
+            raise Exception("No valid records found in permits file")
+            
+        # Create DataFrame
+        df = pd.DataFrame(records, columns=headers)
+        
+        self.console.print(f"✅ Manual parsing: {len(df):,} records, {skipped_lines} skipped lines")
+        
+        return pl.from_pandas(df)
+    
+    def _load_real_accounts_specialized(self, file_path: Path, sample_size: Optional[int] = None) -> pl.DataFrame:
+        """Specialized real accounts loader that handles mixed line endings and chunking issues."""
+        
+        self.console.print(f"🔧 Loading real_acct.txt with specialized line-ending handling...")
+        
+        import pandas as pd
+        import tempfile
+        import os
+        
+        # Pre-process the file to normalize line endings
+        temp_file = None
+        try:
+            # Create a temporary file with normalized line endings
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as temp_f:
+                temp_file = temp_f.name
+                
+                self.console.print(f"🔄 Preprocessing file to normalize line endings...")
+                
+                line_count = 0
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        # Normalize line endings: remove \r and ensure single \n
+                        clean_line = line.replace('\r\n', '\n').replace('\r', '\n').rstrip('\n')
+                        temp_f.write(clean_line + '\n')
+                        line_count += 1
+                        
+                        # Stop if we have enough for sampling
+                        if sample_size and line_count > sample_size:
+                            break
+            
+            self.console.print(f"✅ Preprocessed {line_count:,} lines")
+            
+            # Now use pandas to read the cleaned file
+            try:
+                df = pd.read_csv(
+                    temp_file,
+                    sep='\t',
+                    dtype=str,
+                    encoding='utf-8',
+                    on_bad_lines='skip',
+                    engine='python',  # Better handling of edge cases
+                    nrows=sample_size
+                )
+                
+                self.console.print(f"✅ Successfully loaded {len(df):,} real account records")
+                
+                return pl.from_pandas(df)
+                
+            except Exception as e:
+                self.console.print(f"❌ Pandas failed on preprocessed file: {e}")
+                
+                # Final fallback: manual line parsing
+                return self._parse_real_accounts_manually(temp_file, sample_size)
+        
+        finally:
+            # Clean up temp file
+            if temp_file and os.path.exists(temp_file):
+                os.unlink(temp_file)
+    
+    def _parse_real_accounts_manually(self, file_path: str, sample_size: Optional[int] = None) -> pl.DataFrame:
+        """Manual parsing for real accounts when all else fails."""
+        
+        import pandas as pd
+        
+        self.console.print("🔧 Using manual parsing for real accounts...")
+        
+        records = []
+        skipped_lines = 0
+        
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            # Read header
+            header_line = f.readline().strip()
+            headers = header_line.split('\t')
+            expected_cols = len(headers)
+            
+            self.console.print(f"📋 Expected {expected_cols} columns")
+            
+            # Process lines
+            for line_num, line in enumerate(f, start=2):
+                try:
+                    fields = line.strip().split('\t')
+                    
+                    if len(fields) == expected_cols:
+                        records.append(fields)
+                    elif len(fields) == expected_cols - 1:
+                        # Add empty last field
+                        fields.append('')
+                        records.append(fields)
+                    elif len(fields) == expected_cols + 1 and fields[-1] == '':
+                        # Remove empty last field
+                        records.append(fields[:-1])
+                    else:
+                        skipped_lines += 1
+                        continue
+                        
+                except Exception:
+                    skipped_lines += 1
+                    continue
+                    
+                # Stop if we have enough records
+                if sample_size and len(records) >= sample_size:
+                    break
+        
+        if not records:
+            raise Exception("No valid records found in real accounts file")
+        
+        df = pd.DataFrame(records, columns=headers)
+        
+        self.console.print(f"✅ Manual parsing: {len(df):,} records, {skipped_lines} skipped lines")
+        
+        return pl.from_pandas(df)
+    
+    def _load_owners_specialized(self, file_path: Path) -> pl.DataFrame:
+        """Specialized owners loader that handles CRLF line endings and encoding issues."""
+        
+        self.console.print(f"🔧 Loading owners.txt with specialized CRLF and encoding handling...")
+        
+        import pandas as pd
+        
+        # Try multiple encoding strategies for owners.txt  
+        encodings_to_try = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
+        
+        for encoding in encodings_to_try:
+            try:
+                self.console.print(f"🔄 Trying encoding: {encoding}")
+                
+                df = pd.read_csv(
+                    file_path,
+                    sep='\t',
+                    dtype=str,
+                    encoding=encoding,
+                    on_bad_lines='skip',
+                    engine='python',  # Better for handling CRLF
+                    lineterminator=None,  # Let pandas auto-detect CRLF vs LF
+                    encoding_errors='replace'  # Replace problematic characters
+                )
+                
+                self.console.print(f"✅ Successfully loaded {len(df):,} owner records with {encoding} encoding")
+                
+                # Clean up any encoding artifacts in name fields
+                if 'name' in df.columns:
+                    # Remove any residual encoding artifacts
+                    df['name'] = df['name'].str.replace('�', ' ', regex=False)  # Replace replacement character
+                    df['name'] = df['name'].str.strip()
+                
+                return pl.from_pandas(df)
+                
+            except UnicodeDecodeError as e:
+                self.console.print(f"❌ {encoding} encoding failed: {str(e)[:50]}...")
+                continue
+            except Exception as e:
+                self.console.print(f"❌ {encoding} parsing failed: {str(e)[:50]}...")
+                continue
+        
+        # If all encodings fail, try binary mode preprocessing
+        self.console.print("🔧 All encodings failed, trying binary preprocessing...")
+        return self._preprocess_owners_binary(file_path)
+    
+    def _preprocess_owners_binary(self, file_path: Path) -> pl.DataFrame:
+        """Preprocess owners.txt in binary mode to handle encoding issues."""
+        
+        import pandas as pd
+        import tempfile
+        import os
+        
+        temp_file = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as temp_f:
+                temp_file = temp_f.name
+                
+                self.console.print("🔄 Preprocessing owners.txt to fix encoding issues...")
+                
+                line_count = 0
+                with open(file_path, 'rb') as f:
+                    for line_bytes in f:
+                        try:
+                            # Try utf-8 first, then latin1 as fallback
+                            try:
+                                line = line_bytes.decode('utf-8')
+                            except UnicodeDecodeError:
+                                line = line_bytes.decode('latin1', errors='replace')
+                            
+                            # Normalize line endings and clean up
+                            clean_line = line.replace('\r\n', '\n').replace('\r', '\n').strip()
+                            
+                            # Skip empty lines
+                            if clean_line:
+                                temp_f.write(clean_line + '\n')
+                                line_count += 1
+                                
+                        except Exception:
+                            # Skip completely problematic lines
+                            continue
+            
+            self.console.print(f"✅ Preprocessed {line_count:,} lines")
+            
+            # Now read the cleaned file
+            df = pd.read_csv(
+                temp_file,
+                sep='\t',
+                dtype=str,
+                encoding='utf-8',
+                on_bad_lines='skip',
+                engine='python'
+            )
+            
+            self.console.print(f"✅ Final result: {len(df):,} owner records")
+            
+            return pl.from_pandas(df)
+            
+        finally:
+            # Clean up temp file
+            if temp_file and os.path.exists(temp_file):
+                os.unlink(temp_file)
     
     def _create_json_normalized_data(self, real_accounts_df, owners_df, deeds_df, 
                                    permits_df, tieback_df, neighborhood_df, mineral_df) -> List[Dict]:
@@ -266,11 +611,21 @@ class CountyDataNormalizer(BaseParser):
         
         normalized_records = []
         
-        # Create efficient lookups for related data
+        # Create efficient lookups for related data with normalized account IDs
+        def normalize_account_id(acct_raw) -> str:
+            """Normalize account ID to consistent 13-digit format with leading zeros."""
+            acct = str(acct_raw).strip()
+            
+            # Remove any non-digit characters and pad with leading zeros to 13 digits
+            digits_only = ''.join(c for c in acct if c.isdigit())
+            normalized = digits_only.zfill(13)  # Pad to 13 digits with leading zeros
+            
+            return normalized
+        
         owners_dict = {}
         if owners_df is not None:
             for row in owners_df.iter_rows(named=True):
-                acct = row["acct"]
+                acct = normalize_account_id(row["acct"])
                 if acct not in owners_dict:
                     owners_dict[acct] = []
                 owners_dict[acct].append({
@@ -283,7 +638,7 @@ class CountyDataNormalizer(BaseParser):
         deeds_dict = {}
         if deeds_df is not None:
             for row in deeds_df.iter_rows(named=True):
-                acct = row["acct"]
+                acct = normalize_account_id(row["acct"])  # This will fix the missing leading zeros!
                 if acct not in deeds_dict:
                     deeds_dict[acct] = []
                 deeds_dict[acct].append({
@@ -296,7 +651,7 @@ class CountyDataNormalizer(BaseParser):
         permits_dict = {}
         if permits_df is not None:
             for row in permits_df.iter_rows(named=True):
-                acct = row["acct"]
+                acct = normalize_account_id(row["acct"])
                 if acct not in permits_dict:
                     permits_dict[acct] = []
                 permits_dict[acct].append({
@@ -304,22 +659,47 @@ class CountyDataNormalizer(BaseParser):
                     "agency_id": row.get("agency_id"),
                     "status": row.get("status"),
                     "description": row.get("dscr"),
+                    "dor_code": row.get("dor_cd"),
                     "permit_type": row.get("permit_type"),
                     "permit_type_description": row.get("permit_tp_descr"),
+                    "property_type": row.get("property_tp"),
                     "issue_date": row.get("issue_date"),
-                    "year": row.get("yr")
+                    "year": row.get("yr"),
+                    "site_address": {
+                        "site_number": row.get("site_num"),
+                        "site_prefix": row.get("site_pfx"),
+                        "site_street": row.get("site_str"),
+                        "site_type": row.get("site_tp"),
+                        "site_suffix": row.get("site_sfx"),
+                        "site_apartment": row.get("site_apt")
+                    }
                 })
         
         mineral_dict = {}
         if mineral_df is not None:
             for row in mineral_df.iter_rows(named=True):
-                acct = row["acct"]
+                acct = normalize_account_id(row["acct"])
                 mineral_dict[acct] = {
                     "dor_code": row.get("dor_cd"),
                     "rail_lease_num": row.get("Rail_leasenum"),
                     "interest_type": row.get("Type_Interest"),
                     "interest_percent": row.get("Interest_Percent")
                 }
+        
+        # Create parcel tieback lookup
+        tieback_dict = {}
+        if tieback_df is not None:
+            for row in tieback_df.iter_rows(named=True):
+                acct = normalize_account_id(row["acct"])
+                if acct not in tieback_dict:
+                    tieback_dict[acct] = []
+                tieback_dict[acct].append({
+                    "account_id": row.get("acct"),
+                    "type": row.get("tp"),
+                    "description": row.get("dscr"),
+                    "related_account_id": row.get("related_acct"),
+                    "percentage": row.get("pct")
+                })
         
         # Create neighborhood lookup
         neighborhood_lookup = {}
@@ -333,7 +713,7 @@ class CountyDataNormalizer(BaseParser):
         self.console.print(f"Processing {len(real_accounts_df):,} property records...")
         
         for row in real_accounts_df.iter_rows(named=True):
-            account_id = row["acct"]
+            account_id = normalize_account_id(row["acct"])  # Normalize for consistent joining
             
             # Base property record
             property_record = {
@@ -361,14 +741,21 @@ class CountyDataNormalizer(BaseParser):
                 },
                 "property_details": {
                     "year_improved": row.get("yr_impr"),
+                    "year_annexed": row.get("yr_annexed"),
                     "building_area": row.get("bld_ar"),
                     "land_area": row.get("land_ar"),
                     "acreage": row.get("acreage"),
                     "school_district": row.get("school_dist"),
+                    "state_class": row.get("state_class"),
+                    "economic_area": row.get("econ_area"),
+                    "economic_building_class": row.get("econ_bld_class"),
+                    "center_code": row.get("center_code"),
                     "market_area_1": row.get("Market_Area_1"),
                     "market_area_1_description": row.get("Market_Area_1_Dscr"),
                     "market_area_2": row.get("Market_Area_2"),
-                    "market_area_2_description": row.get("Market_Area_2_Dscr")
+                    "market_area_2_description": row.get("Market_Area_2_Dscr"),
+                    "neighborhood_code": row.get("Neighborhood_Code"),
+                    "neighborhood_group": row.get("Neighborhood_Grp")
                 },
                 "valuation": {
                     "land_value": row.get("land_val"),
@@ -378,6 +765,8 @@ class CountyDataNormalizer(BaseParser):
                     "assessed_value": row.get("assessed_val"),
                     "total_appraised_value": row.get("tot_appr_val"),
                     "total_market_value": row.get("tot_mkt_val"),
+                    "new_construction_value": row.get("new_construction_val"),
+                    "total_rcn_value": row.get("tot_rcn_val"),
                     "prior_values": {
                         "land": row.get("prior_land_val"),
                         "building": row.get("prior_bld_val"),
@@ -385,6 +774,11 @@ class CountyDataNormalizer(BaseParser):
                         "agricultural": row.get("prior_ag_val"),
                         "total_appraised": row.get("prior_tot_appr_val"),
                         "total_market": row.get("prior_tot_mkt_val")
+                    },
+                    "value_changes": {
+                        "land_change": self._calculate_value_change(row.get("land_val"), row.get("prior_land_val")),
+                        "building_change": self._calculate_value_change(row.get("bld_val"), row.get("prior_bld_val")),
+                        "total_market_change": self._calculate_value_change(row.get("tot_mkt_val"), row.get("prior_tot_mkt_val"))
                     }
                 },
                 "legal_status": {
@@ -392,6 +786,9 @@ class CountyDataNormalizer(BaseParser):
                     "noticed": row.get("noticed") == "Y",
                     "notice_date": row.get("notice_dt"),
                     "protested": row.get("protested") == "Y",
+                    "certified_date": row.get("certified_date"),
+                    "revision_date": row.get("rev_dt"),
+                    "revision_by": row.get("rev_by"),
                     "new_owner_date": row.get("new_own_dt"),
                     "legal_description": [
                         row.get("lgl_1"), row.get("lgl_2"), 
@@ -420,9 +817,32 @@ class CountyDataNormalizer(BaseParser):
             if account_id in mineral_dict:
                 property_record["mineral_rights"] = mineral_dict[account_id]
             
+            # Add parcel relationships if available
+            if account_id in tieback_dict:
+                property_record["parcel_relationships"] = tieback_dict[account_id]
+            
             normalized_records.append(property_record)
         
         return normalized_records
+    
+    def _calculate_value_change(self, current_val, prior_val) -> dict:
+        """Calculate percentage and dollar change between current and prior values."""
+        try:
+            current = float(current_val) if current_val else 0
+            prior = float(prior_val) if prior_val else 0
+            
+            if prior == 0:
+                return {"dollar_change": current, "percent_change": None}
+            
+            dollar_change = current - prior
+            percent_change = (dollar_change / prior) * 100
+            
+            return {
+                "dollar_change": round(dollar_change, 2),
+                "percent_change": round(percent_change, 2)
+            }
+        except (ValueError, TypeError):
+            return {"dollar_change": None, "percent_change": None}
     
     def _create_csv_normalized_data(self, real_accounts_df, owners_df, deeds_df, 
                                   permits_df, tieback_df, neighborhood_df, mineral_df) -> pl.DataFrame:

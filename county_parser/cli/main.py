@@ -7,6 +7,7 @@ from rich.table import Table
 
 from ..models import Config
 from ..parsers import RealAccountsParser, OwnersParser, CountyDataNormalizer
+from ..utils.data_validator import DataQualityValidator
 
 
 @click.group()
@@ -233,6 +234,101 @@ def normalize_all(ctx, output_format, output, include_related, sample_size):
     except Exception as e:
         console.print(f"[red]Error during normalization: {e}[/red]")
         raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--check-integrity', is_flag=True, help='Run comprehensive data integrity checks')
+@click.pass_context  
+def diagnose(ctx, check_integrity):
+    """Diagnose data quality issues and parsing problems."""
+    
+    config = ctx.obj['config']
+    console = ctx.obj['console']
+    
+    console.print("[bold]🔍 Data Quality Diagnosis[/bold]")
+    
+    validator = DataQualityValidator()
+    validation_results = []
+    
+    # Check each file for structural issues
+    files_to_check = [
+        ("real_acct.txt", config.real_accounts_file),
+        ("owners.txt", config.owners_file), 
+        ("deeds.txt", config.deeds_file),
+        ("permits.txt", config.permits_file),
+        ("parcel_tieback.txt", config.parcel_tieback_file)
+    ]
+    
+    for display_name, filename in files_to_check:
+        file_path = config.get_file_path(filename)
+        
+        if file_path.exists():
+            console.print(f"\n🔍 Analyzing {display_name}...")
+            
+            # Check for embedded newlines and structural issues
+            structure_issues = validator.detect_embedded_newlines(file_path)
+            
+            # Try to load a small sample using the correct specialized parsers
+            try:
+                normalizer = CountyDataNormalizer(config)
+                
+                # Use the appropriate specialized loader for each file type
+                if display_name == "real_acct.txt":
+                    sample_df = normalizer._load_real_accounts(sample_size=1000)
+                elif display_name == "owners.txt":
+                    sample_df = normalizer._load_owners()
+                elif display_name == "deeds.txt":
+                    sample_df = normalizer._load_deeds()  
+                elif display_name == "permits.txt":
+                    sample_df = normalizer._load_permits()
+                elif display_name == "parcel_tieback.txt":
+                    sample_df = normalizer._load_parcel_tieback()
+                else:
+                    # Fallback to robust loading for other files
+                    sample_df = normalizer._robust_csv_load(file_path, display_name, sample_size=1000)
+                
+                # Get expected column count from header
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    header = f.readline().strip()
+                    expected_cols = len(header.split('\t'))
+                    
+                # Limit sample size for validation if we got full file
+                if len(sample_df) > 1000:
+                    sample_df = sample_df.head(1000)
+                    
+                # Validate row integrity
+                integrity_results = validator.validate_row_integrity(sample_df, expected_cols, display_name)
+                
+                # Combine results
+                combined_results = {
+                    **structure_issues,
+                    **integrity_results,
+                    "parsing_successful": True
+                }
+                validation_results.append(combined_results)
+                
+                # Report issues
+                if structure_issues["issues_found"] > 0:
+                    console.print(f"⚠️  Found {structure_issues['issues_found']} structural issues")
+                elif integrity_results["data_integrity_score"] < 0.95:
+                    console.print(f"⚠️  Data integrity: {integrity_results['data_integrity_score']*100:.1f}%")
+                else:
+                    console.print("✅ Good data quality detected")
+                    
+            except Exception as e:
+                console.print(f"❌ Failed to load sample: {str(e)[:50]}...")
+                validation_results.append({
+                    **structure_issues,
+                    "total_rows": 0,
+                    "data_integrity_score": 0.0,
+                    "parsing_successful": False
+                })
+        else:
+            console.print(f"❌ {display_name} not found at {file_path}")
+    
+    # Generate quality report
+    if validation_results:
+        validator.generate_quality_report(validation_results)
 
 
 @cli.command()
