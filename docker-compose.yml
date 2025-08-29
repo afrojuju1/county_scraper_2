@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: county_scraper_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: county_admin_2024
+      MONGO_INITDB_DATABASE: county_data
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongodb-init:/docker-entrypoint-initdb.d
+    networks:
+      - county_network
+
+  mongo-express:
+    image: mongo-express:1.0
+    container_name: county_scraper_mongo_express
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: admin
+      ME_CONFIG_MONGODB_ADMINPASSWORD: county_admin_2024
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: web_admin_2024
+    ports:
+      - "8082:8081"
+    depends_on:
+      - mongodb
+    networks:
+      - county_network
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  county_network:
+    driver: bridge
