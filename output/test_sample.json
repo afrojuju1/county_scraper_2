@@ -1,0 +1,200 @@
+[
+  {
+    "account_id": "0010010000013            ",
+    "year": "2025",
+    "property_address": {
+      "street_number": "0",
+      "street_prefix": "  ",
+      "street_name": "COMMERCE",
+      "street_suffix": "ST",
+      "street_direction": "  ",
+      "unit": " ",
+      "full_address": "0 COMMERCE ST",
+      "city": "HOUSTON",
+      "zip_code": "77002"
+    },
+    "mailing_address": {
+      "name": "CITY OF HOUSTON",
+      "address_1": "PO BOX 1562",
+      "address_2": " ",
+      "city": "HOUSTON",
+      "state": "TX",
+      "zip": "77251-1562",
+      "country": " "
+    },
+    "property_details": {
+      "year_improved": " ",
+      "building_area": "0",
+      "land_area": "44431",
+      "acreage": "1.0200",
+      "school_district": "01   ",
+      "market_area_1": "4001",
+      "market_area_1_description": "Central Business District",
+      "market_area_2": "4001",
+      "market_area_2_description": "Central Business District"
+    },
+    "valuation": {
+      "land_value": "0",
+      "building_value": "0",
+      "extra_features_value": "0",
+      "agricultural_value": "0",
+      "assessed_value": "0",
+      "total_appraised_value": "0",
+      "total_market_value": "0",
+      "prior_values": {
+        "land": "0",
+        "building": "0",
+        "extra_features": "0",
+        "agricultural": "0",
+        "total_appraised": "0",
+        "total_market": "0"
+      }
+    },
+    "legal_status": {
+      "value_status": "Value Unchanged, Notice Not Required",
+      "noticed": true,
+      "notice_date": "04/21/2025",
+      "protested": false,
+      "new_owner_date": "01/02/1988",
+      "legal_description": [
+        "ALL BLK 1",
+        "SSBB",
+        null,
+        null
+      ],
+      "jurisdictions": "001 040 041 042 043 044 048 061 265 268 576"
+    }
+  },
+  {
+    "account_id": "0010020000001            ",
+    "year": "2025",
+    "property_address": {
+      "street_number": "907",
+      "street_prefix": "  ",
+      "street_name": "COMMERCE",
+      "street_suffix": "ST",
+      "street_direction": "  ",
+      "unit": " ",
+      "full_address": "907 COMMERCE ST",
+      "city": "HOUSTON",
+      "zip_code": "77002"
+    },
+    "mailing_address": {
+      "name": "CURRENT OWNER",
+      "address_1": "1717 SAINT JAMES PLACE STE 112",
+      "address_2": " ",
+      "city": "HOUSTON",
+      "state": "TX",
+      "zip": "77056-3412",
+      "country": " "
+    },
+    "property_details": {
+      "year_improved": " ",
+      "building_area": "0",
+      "land_area": "5001",
+      "acreage": "0.1148",
+      "school_district": "01   ",
+      "market_area_1": "5001",
+      "market_area_1_description": "Central Business District",
+      "market_area_2": "4001",
+      "market_area_2_description": "Central Business District"
+    },
+    "valuation": {
+      "land_value": "300060",
+      "building_value": "0",
+      "extra_features_value": "10296",
+      "agricultural_value": "0",
+      "assessed_value": "310356",
+      "total_appraised_value": "310356",
+      "total_market_value": "310356",
+      "prior_values": {
+        "land": "300060",
+        "building": "10712",
+        "extra_features": "0",
+        "agricultural": "0",
+        "total_appraised": "310772",
+        "total_market": "310772"
+      }
+    },
+    "legal_status": {
+      "value_status": "Noticed",
+      "noticed": true,
+      "notice_date": "04/21/2025",
+      "protested": true,
+      "new_owner_date": "10/31/2012",
+      "legal_description": [
+        "TR 15 BLK 2",
+        "SSBB",
+        null,
+        null
+      ],
+      "jurisdictions": "001 040 041 042 043 044 048 061 265 268 576"
+    }
+  },
+  {
+    "account_id": "0010020000003            ",
+    "year": "2025",
+    "property_address": {
+      "street_number": "0",
+      "street_prefix": "  ",
+      "street_name": "COMMERCE",
+      "street_suffix": "ST",
+      "street_direction": "  ",
+      "unit": " ",
+      "full_address": "0 COMMERCE ST",
+      "city": "HOUSTON",
+      "zip_code": "77002"
+    },
+    "mailing_address": {
+      "name": "MILBY CHARLES FAMILY PTNSH",
+      "address_1": "2612 TODVILLE RD",
+      "address_2": " ",
+      "city": "SEABROOK",
+      "state": "TX",
+      "zip": "77586-3008",
+      "country": " "
+    },
+    "property_details": {
+      "year_improved": " ",
+      "building_area": "0",
+      "land_area": "18121",
+      "acreage": "0.4160",
+      "school_district": "01   ",
+      "market_area_1": "4001",
+      "market_area_1_description": "Central Business District",
+      "market_area_2": "4001",
+      "market_area_2_description": "Central Business District"
+    },
+    "valuation": {
+      "land_value": "860406",
+      "building_value": "0",
+      "extra_features_value": "32949",
+      "agricultural_value": "0",
+      "assessed_value": "893355",
+      "total_appraised_value": "893355",
+      "total_market_value": "893355",
+      "prior_values": {
+        "land": "860406",
+        "building": "34279",
+        "extra_features": "0",
+        "agricultural": "0",
+        "total_appraised": "894685",
+        "total_market": "894685"
+      }
+    },
+    "legal_status": {
+      "value_status": "Noticed",
+      "noticed": true,
+      "notice_date": "04/21/2025",
+      "protested": true,
+      "new_owner_date": "01/02/1988",
+      "legal_description": [
+        ".500 U/D INT IN TR 14 BLK 2",
+        "SSBB",
+        null,
+        null
+      ],
+      "jurisdictions": "001 040 041 042 043 044 048 061 265 268 576"
+    }
+  }
+]
