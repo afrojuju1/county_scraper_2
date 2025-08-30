@@ -1,6 +1,37 @@
-"""Data models for county property data."""
+"""Data models for county parser."""
 
-from .config import Config, ParsingOptions
-from .schemas import RealAccountRecord, OwnerRecord, DeedRecord
+from .config import Config, ParsingOptions, TravisCountyConfig
+from .schemas import (
+    RealAccountRecord,
+    OwnerRecord,
+    DeedRecord,
+    TaxEntityRecord,
+    ImprovementRecord,
+    ImprovementAttributeRecord,
+    LandDetailRecord,
+    AgentRecord,
+    SubdivisionRecord,
+    LawsuitRecord,
+    ArbitrationRecord,
+    MobileHomeRecord,
+    UnifiedPropertyRecord
+)
 
-__all__ = ["Config", "ParsingOptions", "RealAccountRecord", "OwnerRecord", "DeedRecord"]
+__all__ = [
+    "Config",
+    "ParsingOptions", 
+    "TravisCountyConfig",
+    "RealAccountRecord",
+    "OwnerRecord",
+    "DeedRecord",
+    "TaxEntityRecord",
+    "ImprovementRecord",
+    "ImprovementAttributeRecord",
+    "LandDetailRecord",
+    "AgentRecord",
+    "SubdivisionRecord",
+    "LawsuitRecord",
+    "ArbitrationRecord",
+    "MobileHomeRecord",
+    "UnifiedPropertyRecord"
+]
