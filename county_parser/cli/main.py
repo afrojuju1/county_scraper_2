@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ..models import Config
-from ..parsers import RealAccountsParser, OwnersParser, CountyDataNormalizer
+from ..parsers import RealAccountsParser, OwnersParser, HarrisCountyNormalizer
 from ..parsers.travis_normalizer import TravisCountyNormalizer
 from ..parsers.dallas_normalizer import DallasCountyNormalizer
 from ..utils.data_validator import DataQualityValidator
@@ -215,7 +215,7 @@ def normalize_all(ctx, output_format, output, include_related, sample_size, batc
             else:
                 console.print(f"[yellow]Processing ALL county data files...[/yellow]")
                 
-            normalizer = CountyDataNormalizer(config)
+            normalizer = HarrisCountyNormalizer(config)
             
             # Get normalized data directly
             console.print("[blue]📊 Loading and normalizing data...[/blue]")
@@ -278,7 +278,7 @@ def normalize_all(ctx, output_format, output, include_related, sample_size, batc
             raise click.ClickException("Output path required for JSON/CSV formats")
             
         config.parsing.output_format = output_format
-        normalizer = CountyDataNormalizer(config)
+        normalizer = HarrisCountyNormalizer(config)
         output_path = Path(output)
         
         try:
@@ -343,7 +343,7 @@ def diagnose(ctx, check_integrity):
             
             # Try to load a small sample using the correct specialized parsers
             try:
-                normalizer = CountyDataNormalizer(config)
+                normalizer = HarrisCountyNormalizer(config)
                 
                 # Use the appropriate specialized loader for each file type
                 if display_name == "real_acct.txt":
@@ -844,7 +844,7 @@ def compare_counties(ctx, sample_size):
         
         # Load Harris sample (if available)
         harris_config = Config()
-        harris_normalizer = CountyDataNormalizer(harris_config)
+        harris_normalizer = HarrisCountyNormalizer(harris_config)
         
         console.print(f"Loading {sample_size} Harris County records...")
         try:

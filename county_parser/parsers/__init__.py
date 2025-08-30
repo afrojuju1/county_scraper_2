@@ -3,6 +3,6 @@
 from .base import BaseParser
 from .real_accounts import RealAccountsParser
 from .owners import OwnersParser
-from .normalizer import CountyDataNormalizer
+from .harris_normalizer import HarrisCountyNormalizer
 
-__all__ = ["BaseParser", "RealAccountsParser", "OwnersParser", "CountyDataNormalizer"]
+__all__ = ["BaseParser", "RealAccountsParser", "OwnersParser", "HarrisCountyNormalizer"]

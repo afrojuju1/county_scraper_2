@@ -37,10 +37,24 @@ class FixedWidthField:
             if self.type == 'int':
                 # Handle numeric values that might have leading zeros
                 clean_val = value.lstrip('0') or '0'
-                return int(clean_val) if clean_val.isdigit() else 0
+                int_value = int(clean_val) if clean_val.isdigit() else 0
+                
+                # Travis County stores financial values in ten-millionths - convert to dollars  
+                if self.name in ['assessed_value_1', 'land_value', 'improvement_value', 'market_value', 'appraised_value',
+                                'entity_assessed_value', 'entity_market_value', 'entity_taxable_value', 
+                                'prior_year_value', 'tax_amount', 'exemption_amount']:
+                    return int_value / 1000000000.0  # Convert ten-millionths to dollars
+                    
+                return int_value
             elif self.type == 'float':
                 clean_val = value.lstrip('0') or '0'
-                return float(clean_val) / 100 if clean_val.replace('.', '').isdigit() else 0.0
+                float_value = float(clean_val) if clean_val.replace('.', '').isdigit() else 0.0
+                
+                # Tax rates in Travis County are stored in a scaled format - convert to percentage decimal
+                if self.name == 'tax_rate':
+                    return float_value / 1000000000.0  # Convert to decimal percentage (e.g., 0.025 for 2.5%)
+                
+                return float_value / 100
             elif self.type == 'date':
                 # Handle various date formats
                 if len(value) == 8:  # MMDDYYYY or YYYYMMDD
@@ -79,8 +93,11 @@ PROP_FIELDS = [
     FixedWidthField("owner_state", 923, 926, 'str', "Owner state"),
     FixedWidthField("owner_zip", 978, 988, 'str', "Owner ZIP code"),
     
-    # Property Address (Physical Location)
-    FixedWidthField("property_zip", 1138, 1143, 'str', "Property ZIP code"),
+    # Property Address (Physical Location) - FINAL CORRECTED positions (off-by-one fix)
+    FixedWidthField("property_street_name", 1049, 1080, 'str', "Property street name"),
+    FixedWidthField("property_street_type", 1099, 1120, 'str', "Property street type (BLVD, ST, DR, AVE, etc)"),
+    FixedWidthField("property_city", 1120, 1138, 'str', "Property city"), 
+    FixedWidthField("property_zip", 1138, 1148, 'str', "Property ZIP code"),
     
     # Legal Description & Classification
     FixedWidthField("legal_description", 1150, 1250, 'str', "Legal description"),
@@ -184,6 +201,19 @@ def normalize_travis_account_id(account_id: str) -> str:
     # Travis County typically uses 12-digit account IDs
     return clean_id.zfill(12)
 
+def build_street_address(street_name: str, street_type: str) -> str:
+    """Build complete street address from name and type components."""
+    if not street_name and not street_type:
+        return None
+    
+    parts = []
+    if street_name and street_name.strip():
+        parts.append(street_name.strip())
+    if street_type and street_type.strip():
+        parts.append(street_type.strip())
+    
+    return ' '.join(parts) if parts else None
+
 
 def map_to_unified_model(prop_record: Dict[str, Any], entity_records: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -209,8 +239,11 @@ def map_to_unified_model(prop_record: Dict[str, Any], entity_records: List[Dict[
         
         # Property Address (Physical Property Location)
         "property_address": {
-            "street_address": None,  # Travis doesn't have separate property address
-            "city": None,
+            "street_address": build_street_address(
+                prop_record.get('property_street_name'), 
+                prop_record.get('property_street_type')
+            ),
+            "city": prop_record.get('property_city'),
             "state": "TX", 
             "zip_code": prop_record.get('property_zip')
         },

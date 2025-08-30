@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-County Property Data Viewer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="title">🏠 Multi-County Property Data</h1>
+                <p class="subtitle">Harris, Travis & Dallas Counties - Texas</p>
+            </div>
+            <div class="stats-cards" id="statsCards">
+                <div class="stat-card loading">
+                    <div class="stat-value">--</div>
+                    <div class="stat-label">Total Properties</div>
+                </div>
+                <div class="stat-card loading">
+                    <div class="stat-value">--</div>
+                    <div class="stat-label">Counties</div>
+                </div>
+                <div class="stat-card loading">
+                    <div class="stat-value">--</div>
+                    <div class="stat-label">Avg Value</div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Controls -->
+        <div class="controls">
+            <div class="control-group">
+                <label for="countyFilter">Filter by County:</label>
+                <select id="countyFilter">
+                    <option value="all">All Counties</option>
+                    <option value="harris">Harris County</option>
+                    <option value="travis">Travis County</option>
+                    <option value="dallas">Dallas County</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="sampleSize">Sample Size:</label>
+                <select id="sampleSize">
+                    <option value="50">50 Properties</option>
+                    <option value="100" selected>100 Properties</option>
+                    <option value="200">200 Properties</option>
+                    <option value="500">500 Properties</option>
+                </select>
+            </div>
+            <button id="refreshBtn" class="btn btn-primary">🔄 Refresh Data</button>
+        </div>
+
+        <!-- County Distribution -->
+        <div class="section">
+            <h2>📊 County Distribution</h2>
+            <div id="countyChart" class="chart-container">
+                <div class="loading-spinner">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Properties Table -->
+        <div class="section">
+            <h2>🏘️ Property Sample</h2>
+            <div class="table-controls">
+                <div class="search-box">
+                    <input type="text" id="searchInput" placeholder="Search properties..." />
+                </div>
+                <div class="table-info" id="tableInfo">
+                    <span>Loading...</span>
+                </div>
+            </div>
+            <div class="table-container">
+                <table id="propertiesTable">
+                    <thead>
+                        <tr>
+                            <th>County</th>
+                            <th>Account ID</th>
+                            <th>Owner</th>
+                            <th>Address</th>
+                            <th>Market Value</th>
+                            <th>Tax Entities</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td colspan="6" class="loading-row">
+                                <div class="loading-spinner">Loading property data...</div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
