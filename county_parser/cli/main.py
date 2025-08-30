@@ -8,8 +8,8 @@ from datetime import datetime
 
 from ..models import Config
 from ..parsers import RealAccountsParser, OwnersParser, HarrisCountyNormalizer
-from ..parsers.travis_normalizer import TravisCountyNormalizer
-from ..parsers.dallas_normalizer import DallasCountyNormalizer
+from ..parsers.travis_parser import TravisCountyNormalizer
+from ..parsers.dallas_parser import DallasCountyNormalizer
 from ..utils.data_validator import DataQualityValidator
 from ..services import MongoDBService
 
