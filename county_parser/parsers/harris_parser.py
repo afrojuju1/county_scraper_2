@@ -874,9 +874,182 @@ class HarrisCountyNormalizer(BaseParser):
             if account_id in tieback_dict:
                 property_record["parcel_relationships"] = tieback_dict[account_id]
             
+            # Create tax entities field for consistency with unified schema
+            tax_entities = []
+            
+            # Add school district as a tax entity
+            if row.get("school_dist"):
+                tax_entities.append({
+                    "entity_name": f"School District {row.get('school_dist')}",
+                    "entity_type": "SCHOOL",
+                    "jurisdiction_id": row.get("school_dist"),
+                    "assessed_value": row.get("assessed_val"),
+                    "market_value": row.get("tot_mkt_val"),
+                    "taxable_value": row.get("assessed_val"),
+                    "tax_rate": None,  # Harris County doesn't provide tax rates
+                    "description": "School District"
+                })
+            
+            # Add county as a tax entity
+            tax_entities.append({
+                "entity_name": "Harris County",
+                "entity_type": "COUNTY",
+                "jurisdiction_id": "HARRIS",
+                "assessed_value": row.get("assessed_val"),
+                "market_value": row.get("tot_mkt_val"),
+                "taxable_value": row.get("assessed_val"),
+                "tax_rate": None,
+                "description": "County Government"
+            })
+            
+            # Add city/municipality if available
+            if row.get("site_addr_2") and row.get("site_addr_2").strip():
+                city_name = row.get("site_addr_2").strip()
+                tax_entities.append({
+                    "entity_name": f"City of {city_name}",
+                    "entity_type": "CITY",
+                    "jurisdiction_id": city_name.upper().replace(" ", "_"),
+                    "assessed_value": row.get("assessed_val"),
+                    "market_value": row.get("tot_mkt_val"),
+                    "taxable_value": row.get("assessed_val"),
+                    "tax_rate": None,
+                    "description": "Municipal Government"
+                })
+            
+            # Add jurisdictions if available
+            if row.get("jurs") and row.get("jurs").strip():
+                jurisdictions = row.get("jurs").strip().split(",")
+                for jur in jurisdictions:
+                    jur = jur.strip()
+                    if jur:
+                        tax_entities.append({
+                            "entity_name": f"Jurisdiction: {jur}",
+                            "entity_type": "JURISDICTION",
+                            "jurisdiction_id": jur.upper().replace(" ", "_"),
+                            "assessed_value": row.get("assessed_val"),
+                            "market_value": row.get("tot_mkt_val"),
+                            "taxable_value": row.get("assessed_val"),
+                            "tax_rate": None,
+                            "description": "Special Jurisdiction"
+                        })
+            
+            property_record["tax_entities"] = tax_entities
+            
+            # Add improvements field for unified schema compatibility
+            property_record["improvements"] = self._build_improvements(row)
+            
+            # Add land details field for unified schema compatibility
+            property_record["land_details"] = self._build_land_details(row)
+            
             normalized_records.append(property_record)
         
         return normalized_records
+    
+    def _build_improvements(self, row) -> List[Dict[str, Any]]:
+        """Build improvements list for unified schema compatibility."""
+        improvements = []
+        
+        # Main building improvement
+        if row.get("yr_impr") or row.get("bld_ar"):
+            improvements.append({
+                "improvement_id": f"{row.get('acct', '')}_MAIN",
+                "improvement_type": "Main Building",
+                "improvement_class": row.get("econ_bld_class", "Building"),
+                "year_built": self._safe_int(row.get("yr_impr")),
+                "square_footage": self._safe_int(row.get("bld_ar")),
+                "value": self._safe_int(row.get("bld_val", 0)),
+                "description": f"Building - {row.get('econ_bld_class', 'Structure')} - {row.get('bld_ar', 0)} sq ft"
+            })
+        
+        # Extra features improvement
+        if row.get("x_features_val") and self._safe_int(row.get("x_features_val", 0)) > 0:
+            improvements.append({
+                "improvement_id": f"{row.get('acct', '')}_EXTRA",
+                "improvement_type": "Extra Features",
+                "improvement_class": "Features",
+                "value": self._safe_int(row.get("x_features_val", 0)),
+                "description": "Extra features and amenities"
+            })
+        
+        # Agricultural improvements
+        if row.get("ag_val") and self._safe_int(row.get("ag_val", 0)) > 0:
+            improvements.append({
+                "improvement_id": f"{row.get('acct', '')}_AG",
+                "improvement_type": "Agricultural",
+                "improvement_class": "Agricultural",
+                "value": self._safe_int(row.get("ag_val", 0)),
+                "description": "Agricultural improvements and structures"
+            })
+        
+        return improvements
+    
+    def _build_land_details(self, row) -> List[Dict[str, Any]]:
+        """Build land details list for unified schema compatibility."""
+        land_details = []
+        
+        # Main land record
+        land_record = {
+            "land_id": f"{row.get('acct', '')}_LAND",
+            "land_type": "LAND",
+            "land_description": " ".join(filter(None, [
+                row.get("lgl_1", ""),
+                row.get("lgl_2", ""),
+                row.get("lgl_3", ""),
+                row.get("lgl_4", "")
+            ])),
+            "land_class": row.get("state_class", "Unknown"),
+            "land_area": self._safe_int(row.get("land_ar", 0)),
+            "land_value": self._safe_int(row.get("land_val", 0))
+        }
+        
+        # Add additional land characteristics
+        if row.get("acreage"):
+            land_record["acreage"] = self._safe_float(row.get("acreage", 0))
+        
+        if row.get("Market_Area_1"):
+            land_record["market_area"] = row.get("Market_Area_1")
+            if row.get("Market_Area_1_Dscr"):
+                land_record["market_area_description"] = row.get("Market_Area_1_Dscr")
+        
+        if row.get("Neighborhood_Code"):
+            land_record["neighborhood_code"] = row.get("Neighborhood_Code")
+            if row.get("Neighborhood_Grp"):
+                land_record["neighborhood_group"] = row.get("Neighborhood_Grp")
+        
+        land_details.append(land_record)
+        
+        # Add economic area classification
+        if row.get("econ_area"):
+            land_details.append({
+                "land_id": f"{row.get('acct', '')}_ECON",
+                "land_type": "ECONOMIC_AREA",
+                "land_description": f"Economic Area: {row.get('econ_area')}",
+                "land_class": "Economic",
+                "land_area": 0,  # Not a physical area
+                "land_value": 0,  # Not a separate value
+                "economic_area": row.get("econ_area"),
+                "center_code": row.get("center_code")
+            })
+        
+        return land_details
+    
+    def _safe_int(self, value) -> int:
+        """Safely convert value to integer."""
+        if value is None or value == '':
+            return 0
+        try:
+            return int(float(str(value).replace(',', '').strip()))
+        except (ValueError, TypeError):
+            return 0
+    
+    def _safe_float(self, value) -> float:
+        """Safely convert value to float."""
+        if value is None or value == '':
+            return 0.0
+        try:
+            return float(str(value).replace(',', '').strip())
+        except (ValueError, TypeError):
+            return 0.0
     
     def _calculate_value_change(self, current_val, prior_val) -> dict:
         """Calculate percentage and dollar change between current and prior values."""

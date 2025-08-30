@@ -197,6 +197,137 @@ class TravisFieldExtractor:
             return account_id if account_id else None
         return None
 
+    def extract_improvement_record(self, line: str) -> Optional[Dict[str, Any]]:
+        """Extract a single improvement record from IMP_DET.TXT line."""
+        if not line or len(line) < 100:
+            return None
+            
+        record = {}
+        
+        # Define improvement fields inline since they keep getting removed
+        improvement_fields = [
+            FixedWidthField("account_id", 0, 12, 'str', "Property account ID"),
+            FixedWidthField("improvement_id", 12, 22, 'str', "Improvement identifier"),
+            FixedWidthField("improvement_type", 22, 42, 'str', "Type of improvement"),
+            FixedWidthField("improvement_class", 42, 62, 'str', "Improvement classification"),
+            FixedWidthField("year_built", 62, 66, 'int', "Year improvement was built"),
+            FixedWidthField("square_footage", 66, 76, 'int', "Square footage of improvement"),
+            FixedWidthField("value", 76, 86, 'int', "Value of improvement in ten-millionths"),
+            FixedWidthField("description", 86, 136, 'str', "Improvement description"),
+        ]
+        
+        for field in improvement_fields:
+            try:
+                value = field.extract(line)
+                if value is not None:
+                    record[field.name] = value
+            except Exception as e:
+                # Skip problematic fields but continue processing
+                continue
+        
+        # Only return record if it has essential fields
+        if record.get('account_id'):
+            return record
+        
+        return None
+
+    def extract_land_detail_record(self, line: str) -> Optional[Dict[str, Any]]:
+        """Extract a single land detail record from LAND_DET.TXT line."""
+        if not line or len(line) < 100:
+            return None
+            
+        record = {}
+        
+        # Define land detail fields inline since they keep getting removed
+        land_detail_fields = [
+            FixedWidthField("account_id", 0, 12, 'str', "Property account ID"),
+            FixedWidthField("land_id", 12, 22, 'str', "Land identifier"),
+            FixedWidthField("land_type", 22, 42, 'str', "Type of land"),
+            FixedWidthField("land_description", 42, 92, 'str', "Land description"),
+            FixedWidthField("land_class", 92, 112, 'str', "Land classification code"),
+            FixedWidthField("land_area", 112, 122, 'int', "Land area in square feet"),
+            FixedWidthField("land_value", 122, 132, 'int', "Land value in ten-millionths"),
+        ]
+        
+        for field in land_detail_fields:
+            try:
+                value = field.extract(line)
+                if value is not None:
+                    record[field.name] = value
+            except Exception as e:
+                # Skip problematic fields but continue processing
+                continue
+        
+        # Only return record if it has essential fields
+        if record.get('account_id'):
+            return record
+        
+        return None
+
+    def extract_agent_record(self, line: str) -> Optional[Dict[str, Any]]:
+        """Extract a single agent record from AGENT.TXT line."""
+        if not line or len(line) < 100:
+            return None
+            
+        record = {}
+        
+        # Define agent fields inline since they keep getting removed
+        # Note: AGENT.TXT contains standalone agent records, not property-specific agents
+        agent_fields = [
+            FixedWidthField("agent_id", 0, 12, 'str', "Agent identifier"),
+            FixedWidthField("agent_name", 12, 72, 'str', "Agent name"),
+            FixedWidthField("agent_address", 72, 142, 'str', "Agent address"),
+            FixedWidthField("agent_city", 142, 162, 'str', "Agent city"),
+            FixedWidthField("agent_state", 162, 165, 'str', "Agent state"),
+            FixedWidthField("agent_zip", 165, 175, 'str', "Agent ZIP code"),
+        ]
+        
+        for field in agent_fields:
+            try:
+                value = field.extract(line)
+                if value is not None:
+                    record[field.name] = value
+            except Exception as e:
+                # Skip problematic fields but continue processing
+                continue
+        
+        # Only return record if it has essential fields
+        if record.get('agent_id'):
+            return record
+        
+        return None
+
+    def extract_subdivision_record(self, line: str) -> Optional[Dict[str, Any]]:
+        """Extract a single subdivision record from ABS_SUBD.TXT line."""
+        if not line or len(line) < 100:
+            return None
+            
+        record = {}
+        
+        # Define subdivision fields inline since they keep getting removed
+        subdivision_fields = [
+            FixedWidthField("subdivision_id", 0, 12, 'str', "Subdivision identifier"),
+            FixedWidthField("subdivision_name", 12, 62, 'str', "Subdivision name"),
+            FixedWidthField("subdivision_type", 62, 82, 'str', "Type of subdivision"),
+            FixedWidthField("city", 82, 112, 'str', "City where subdivision is located"),
+            FixedWidthField("county", 112, 132, 'str', "County where subdivision is located"),
+        ]
+        
+        for field in subdivision_fields:
+            try:
+                value = field.extract(line)
+                if value is not None:
+                    record[field.name] = value
+            except Exception as e:
+                # Skip problematic fields but continue processing
+                continue
+        
+        # Only return record if it has essential fields
+        if record.get('subdivision_id'):
+            return record
+        
+        return None
+
 
 def normalize_travis_account_id(account_id: str) -> str:
     """Normalize Travis County account ID to consistent format."""
@@ -331,5 +462,9 @@ def map_to_unified_model(prop_record: Dict[str, Any], entity_records: List[Dict[
                 "exemption_amount": entity_record.get('exemption_amount', 0)
             }
             unified_record["tax_entities"].append(tax_entity)
+    
+    # Add improvements and land_details fields for unified schema compatibility
+    unified_record["improvements"] = []  # Will be populated when we implement improvement extraction
+    unified_record["land_details"] = []  # Will be populated when we implement land detail extraction
     
     return unified_record

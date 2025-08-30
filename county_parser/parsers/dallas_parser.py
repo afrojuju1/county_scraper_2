@@ -402,6 +402,10 @@ class DallasCountyNormalizer:
             },
             "tax_entities": tax_entities,
             "owners": owners,
+            # Add improvements field for unified schema compatibility
+            "improvements": self._build_improvements(account_row, res_data),
+            # Add land details field for unified schema compatibility  
+            "land_details": self._build_land_details(account_row, land_data),
             "metadata": {
                 "data_source": "dallas_county_appraisal_district",
                 "last_updated": None,
@@ -411,6 +415,82 @@ class DallasCountyNormalizer:
         }
         
         return unified_record
+
+    def _build_improvements(self, account_row: pd.Series, res_data: Optional[pd.Series]) -> List[Dict[str, Any]]:
+        """Build improvements list for unified schema compatibility."""
+        improvements = []
+        
+        if res_data is not None:
+            # Main building improvement
+            if res_data.get('TOT_LIVING_AREA_SF') or res_data.get('YR_BUILT'):
+                improvements.append({
+                    "improvement_id": f"{account_row.get('ACCOUNT_NUM', '')}_MAIN",
+                    "improvement_type": "Main Building",
+                    "improvement_class": self._safe_str(res_data.get('BLDG_CLASS_DESC', '')),
+                    "year_built": self._safe_int(res_data.get('YR_BUILT')),
+                    "square_footage": self._safe_int(res_data.get('TOT_LIVING_AREA_SF')),
+                    "value": self._safe_int(res_data.get('IMPR_VAL', 0)),
+                    "description": f"{self._safe_str(res_data.get('BLDG_CLASS_DESC', 'Building'))} - {self._safe_str(res_data.get('NUM_STORIES_DESC', ''))} stories"
+                })
+            
+            # Additional building features
+            if res_data.get('TOT_MAIN_SF') and res_data.get('TOT_MAIN_SF') != res_data.get('TOT_LIVING_AREA_SF'):
+                improvements.append({
+                    "improvement_id": f"{account_row.get('ACCOUNT_NUM', '')}_ADDITIONAL",
+                    "improvement_type": "Additional Area",
+                    "improvement_class": "Additional",
+                    "square_footage": self._safe_int(res_data.get('TOT_MAIN_SF')),
+                    "value": 0,  # Value included in main building
+                    "description": "Additional building area beyond living space"
+                })
+        
+        # Add any other improvements from property details
+        if account_row.get('BLDG_ID'):
+            improvements.append({
+                "improvement_id": f"{account_row.get('ACCOUNT_NUM', '')}_BLDG_{account_row.get('BLDG_ID')}",
+                "improvement_type": "Building Structure",
+                "improvement_class": "Structure",
+                "value": 0,
+                "description": f"Building ID: {account_row.get('BLDG_ID')}"
+            })
+        
+        return improvements
+
+    def _build_land_details(self, account_row: pd.Series, land_data: Optional[pd.Series]) -> List[Dict[str, Any]]:
+        """Build land details list for unified schema compatibility."""
+        land_details = []
+        
+        # Main land record
+        land_record = {
+            "land_id": f"{account_row.get('ACCOUNT_NUM', '')}_LAND",
+            "land_type": "LAND",
+            "land_description": self._build_legal_description(account_row),
+            "land_class": self._safe_str(account_row.get('DIVISION_CD', '')),
+            "land_area": self._safe_float(account_row.get('LAND_AREA', 0)),
+            "land_value": self._safe_int(account_row.get('LAND_VAL', 0))
+        }
+        
+        if land_data is not None:
+            land_record.update({
+                "zoning": self._safe_str(land_data.get('ZONING', '')),
+                "front_dimension": self._safe_float(land_data.get('FRONT_DIM', 0)),
+                "depth_dimension": self._safe_float(land_data.get('DEPTH_DIM', 0))
+            })
+        
+        land_details.append(land_record)
+        
+        # Add any additional land classifications
+        if account_row.get('ACREAGE'):
+            land_details.append({
+                "land_id": f"{account_row.get('ACCOUNT_NUM', '')}_ACREAGE",
+                "land_type": "ACREAGE",
+                "land_description": f"Acreage: {account_row.get('ACREAGE')} acres",
+                "land_class": "ACREAGE",
+                "land_area": self._safe_float(account_row.get('ACREAGE', 0)) * 43560,  # Convert acres to sq ft
+                "land_value": 0  # Value included in main land record
+            })
+        
+        return land_details
 
     def _build_street_address(self, account_row: pd.Series) -> str:
         """Build full street address from components."""

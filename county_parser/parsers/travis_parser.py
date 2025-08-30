@@ -227,7 +227,11 @@ class TravisCountyNormalizer:
         return entity_records
     
     def normalize_to_unified_format(self, property_records: Dict[str, Dict], 
-                                  entity_records: Dict[str, List[Dict]]) -> List[Dict]:
+                                  entity_records: Dict[str, List[Dict]],
+                                  improvement_records: Dict[str, List[Dict]] = None,
+                                  land_detail_records: Dict[str, List[Dict]] = None,
+                                  agent_records: Dict[str, List[Dict]] = None,
+                                  subdivision_records: Dict[str, Dict] = None) -> List[Dict]:
         """Transform raw Travis County data into our unified schema format."""
         self.console.print("[blue]🔄 Transforming to unified schema format...[/blue]")
         
@@ -238,14 +242,42 @@ class TravisCountyNormalizer:
                 # Get related entity records for this property
                 related_entities = entity_records.get(account_id, [])
                 
+                # Get related improvement records
+                related_improvements = improvement_records.get(account_id, []) if improvement_records else []
+                
+                # Get related land detail records
+                related_land_details = land_detail_records.get(account_id, []) if land_detail_records else []
+                
+                # Get related agent records (agents are standalone, not property-specific)
+                # For now, we'll include all available agents as a general reference
+                related_agents = agent_records.get('general_agents', []) if agent_records else []
+                
                 # Transform to unified format using our corrected field specifications
                 unified_record = map_to_unified_model(prop_record, related_entities)
+                
+                # Add improvements field for unified schema compatibility
+                unified_record['improvements'] = related_improvements
+                
+                # Add land details field for unified schema compatibility
+                unified_record['land_details'] = related_land_details
+                
+                # Add agents field for unified schema compatibility
+                unified_record['agents'] = related_agents
+                
+                # Add subdivision info if available (look up by subdivision code)
+                if subdivision_records and prop_record.get('subdivision_code'):
+                    subdivision_code = prop_record.get('subdivision_code')
+                    if subdivision_code in subdivision_records:
+                        unified_record['subdivision'] = subdivision_records[subdivision_code]
                 
                 # Add processing metadata
                 unified_record['metadata']['last_updated'] = datetime.now().isoformat()
                 unified_record['metadata']['processing_stats'] = {
                     'extraction_success': True,
                     'entity_count': len(related_entities),
+                    'improvement_count': len(related_improvements),
+                    'land_detail_count': len(related_land_details),
+                    'agent_count': len(related_agents),
                     'processing_timestamp': datetime.now().isoformat()
                 }
                 
@@ -285,8 +317,23 @@ class TravisCountyNormalizer:
         property_account_ids = set(property_records.keys())
         entity_records = self.extract_entity_records(property_account_ids)
         
-        # Step 3: Transform to unified format
-        normalized_records = self.normalize_to_unified_format(property_records, entity_records)
+        # Step 3: Extract improvement records
+        improvement_records = self.extract_improvement_records(property_account_ids)
+        
+        # Step 4: Extract land detail records
+        land_detail_records = self.extract_land_detail_records(property_account_ids)
+        
+        # Step 5: Extract agent records
+        agent_records = self.extract_agent_records(property_account_ids)
+        
+        # Step 6: Extract subdivision records (not tied to specific accounts)
+        subdivision_records = self.extract_subdivision_records()
+        
+        # Step 7: Transform to unified format with all related data
+        normalized_records = self.normalize_to_unified_format(
+            property_records, entity_records, improvement_records, 
+            land_detail_records, agent_records, subdivision_records
+        )
         
         # Display processing summary
         self._display_processing_summary()
@@ -393,3 +440,134 @@ class TravisCountyNormalizer:
             )
         
         return comparison
+
+    def extract_improvement_records(self, property_account_ids: set) -> Dict[str, List[Dict]]:
+        """Extract improvement records from IMP_DET.TXT for the given property accounts."""
+        improvement_records = {}
+        
+        if not self.files['improvements'].exists():
+            self.console.print("[yellow]⚠️ IMP_DET.TXT not found, skipping improvements[/yellow]")
+            return improvement_records
+        
+        try:
+            with open(self.files['improvements'], 'r', encoding='utf-8', errors='ignore') as f:
+                for line_num, line in enumerate(f, 1):
+                    if not line.strip():
+                        continue
+                    
+                    try:
+                        record = self.field_extractor.extract_improvement_record(line.strip())
+                        if record and record.get('account_id') in property_account_ids:
+                            account_id = record['account_id']
+                            if account_id not in improvement_records:
+                                improvement_records[account_id] = []
+                            improvement_records[account_id].append(record)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to parse improvement record at line {line_num}: {e}")
+                        continue
+            
+            self.console.print(f"[green]✅ Extracted {sum(len(records) for records in improvement_records.values()):,} improvement records[/green]")
+            
+        except Exception as e:
+            self.console.print(f"[red]❌ Error reading improvements file: {e}[/red]")
+            self.processing_stats['processing_errors'].append(f"Improvements extraction failed: {e}")
+        
+        return improvement_records
+
+    def extract_land_detail_records(self, property_account_ids: set) -> Dict[str, List[Dict]]:
+        """Extract land detail records from LAND_DET.TXT for the given property accounts."""
+        land_detail_records = {}
+        
+        if not self.files['land_details'].exists():
+            self.console.print("[yellow]⚠️ LAND_DET.TXT not found, skipping land details[/yellow]")
+            return land_detail_records
+        
+        try:
+            with open(self.files['land_details'], 'r', encoding='utf-8', errors='ignore') as f:
+                for line_num, line in enumerate(f, 1):
+                    if not line.strip():
+                        continue
+                    
+                    try:
+                        record = self.field_extractor.extract_land_detail_record(line.strip())
+                        if record and record.get('account_id') in property_account_ids:
+                            account_id = record['account_id']
+                            if account_id not in land_detail_records:
+                                land_detail_records[account_id] = []
+                            land_detail_records[account_id].append(record)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to parse land detail record at line {line_num}: {e}")
+                        continue
+            
+            self.console.print(f"[green]✅ Extracted {sum(len(records) for records in land_detail_records.values()):,} land detail records[/green]")
+            
+        except Exception as e:
+            self.console.print(f"[red]❌ Error reading land details file: {e}[/red]")
+            self.processing_stats['processing_errors'].append(f"Land details extraction failed: {e}")
+        
+        return land_detail_records
+
+    def extract_agent_records(self, property_account_ids: set) -> Dict[str, List[Dict]]:
+        """Extract agent records from AGENT.TXT (standalone records, not tied to properties)."""
+        agent_records = {}
+        
+        if not self.files['agents'].exists():
+            self.console.print("[yellow]⚠️ AGENT.TXT not found, skipping agents[/yellow]")
+            return agent_records
+        
+        try:
+            with open(self.files['agents'], 'r', encoding='utf-8', errors='ignore') as f:
+                for line_num, line in enumerate(f, 1):
+                    if not line.strip():
+                        continue
+                    
+                    try:
+                        record = self.field_extractor.extract_agent_record(line.strip())
+                        if record and record.get('agent_id'):
+                            # Agents are standalone records, not tied to specific properties
+                            # Store them with a special key for general reference
+                            if 'general_agents' not in agent_records:
+                                agent_records['general_agents'] = []
+                            agent_records['general_agents'].append(record)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to parse agent record at line {line_num}: {e}")
+                        continue
+            
+            self.console.print(f"[green]✅ Extracted {len(agent_records.get('general_agents', [])):,} agent records[/green]")
+            
+        except Exception as e:
+            self.console.print(f"[red]❌ Error reading agents file: {e}[/red]")
+            self.processing_stats['processing_errors'].append(f"Agents extraction failed: {e}")
+        
+        return agent_records
+
+    def extract_subdivision_records(self) -> Dict[str, Dict]:
+        """Extract subdivision records from ABS_SUBD.TXT (not tied to specific accounts)."""
+        subdivision_records = {}
+        
+        if not self.files['subdivisions'].exists():
+            self.console.print("[yellow]⚠️ ABS_SUBD.TXT not found, skipping subdivisions[/yellow]")
+            return subdivision_records
+        
+        try:
+            with open(self.files['subdivisions'], 'r', encoding='utf-8', errors='ignore') as f:
+                for line_num, line in enumerate(f, 1):
+                    if not line.strip():
+                        continue
+                    
+                    try:
+                        record = self.field_extractor.extract_subdivision_record(line.strip())
+                        if record and record.get('subdivision_id'):
+                            subdivision_id = record['subdivision_id']
+                            subdivision_records[subdivision_id] = record
+                    except Exception as e:
+                        self.logger.warning(f"Failed to parse subdivision record at line {line_num}: {e}")
+                        continue
+            
+            self.console.print(f"[green]✅ Extracted {len(subdivision_records):,} subdivision records[/green]")
+            
+        except Exception as e:
+            self.console.print(f"[red]❌ Error reading subdivisions file: {e}[/red]")
+            self.processing_stats['processing_errors'].append(f"Subdivisions extraction failed: {e}")
+        
+        return subdivision_records
