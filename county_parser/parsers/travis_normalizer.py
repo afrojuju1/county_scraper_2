@@ -20,6 +20,9 @@ import json
 from datetime import datetime
 import logging
 
+# Import Travis field extractor
+from .travis_field_specs import TravisFieldExtractor, map_to_unified_model
+
 class TravisCountyNormalizer:
     """Normalizer for Travis County appraisal data."""
     
@@ -45,8 +48,7 @@ class TravisCountyNormalizer:
         }
         
         # Initialize field extractor
-        # We'll import these when needed to avoid import issues
-        # self.field_extractor = TravisFieldExtractor()
+        self.field_extractor = TravisFieldExtractor()
         
         # Data quality metrics
         self.processing_stats = {

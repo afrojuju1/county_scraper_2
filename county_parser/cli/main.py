@@ -4,6 +4,7 @@ import click
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
+from datetime import datetime
 
 from ..models import Config
 from ..parsers import RealAccountsParser, OwnersParser, HarrisCountyNormalizer
@@ -582,20 +583,10 @@ def backup_mongodb(ctx, output, mongo_uri, database):
 @cli.command()
 @click.option('--mongo-uri', help='MongoDB connection URI (overrides environment)')
 @click.option('--database', help='MongoDB database name (overrides environment)')
-@click.option('--confirm', is_flag=True, help='Skip confirmation prompt')
 @click.pass_context
-def clean_mongodb(ctx, mongo_uri, database, confirm):
+def clean_mongodb(ctx, mongo_uri, database):
     """Clean/reset MongoDB collections (properties and processing_logs)."""
     console = ctx.obj['console']
-    
-    if not confirm:
-        console.print("[yellow]⚠️  This will DELETE ALL data in the MongoDB collections![/yellow]")
-        console.print("   - Properties collection")
-        console.print("   - Processing logs collection")
-        
-        if not click.confirm("Are you sure you want to continue?"):
-            console.print("[blue]Operation cancelled.[/blue]")
-            return
     
     try:
         from ..services import MongoDBService
@@ -1720,6 +1711,610 @@ def info(ctx):
             console.print(f"✅ {name}: {info['file_size_mb']} MB ({info['file_path']})")
         else:
             console.print(f"❌ {name}: File not found ({parser.get_file_path()})")
+
+
+@cli.command()
+@click.option('--sample-size', default=5000, help='Number of random properties to sample and load')
+@click.option('--batch-id', help='Custom batch ID for tracking')
+@click.option('--mongo-uri', help='MongoDB connection URI (overrides environment)')
+@click.option('--database', help='MongoDB database name (overrides environment)')
+@click.option('--force-reload', is_flag=True, help='Force reload even if data exists')
+@click.pass_context
+def load_harris_sample_for_frontend(ctx, sample_size, batch_id, mongo_uri, database, force_reload):
+    """Load a random sample of Harris County properties into MongoDB for frontend review."""
+    console = ctx.obj['console']
+    
+    try:
+        from ..models.config import Config
+        harris_config = Config()
+        harris_config.county_type = "harris"  # Ensure Harris County mode
+        
+        console.print(f"[bold blue]🏛️ Harris County Frontend Sample Loader[/bold blue]")
+        console.print(f"🎯 Target: {sample_size:,} random properties for frontend review")
+        
+        # Check if we already have Harris County data
+        from ..services import MongoDBService
+        mongodb = MongoDBService(mongo_uri=mongo_uri, database=database)
+        
+        if not mongodb.connect():
+            raise click.ClickException("Failed to connect to MongoDB")
+        
+        try:
+            # Check existing Harris County data
+            existing_harris_count = mongodb.properties_collection.count_documents({'county': 'harris'})
+            
+            if existing_harris_count > 0 and not force_reload:
+                console.print(f"[yellow]⚠️ Found {existing_harris_count:,} existing Harris County properties[/yellow]")
+                console.print("[yellow]Use --force-reload to replace existing data[/yellow]")
+                
+                # Show sample of existing data
+                sample_existing = list(mongodb.properties_collection.find(
+                    {'county': 'harris'}, 
+                    {'account_id': 1, 'property_address': 1, 'valuation': 1}
+                ).limit(5))
+                
+                if sample_existing:
+                    console.print(f"\n[blue]📋 Sample of existing data:[/blue]")
+                    for prop in sample_existing:
+                        addr = prop.get('property_address', {})
+                        street = addr.get('street_address', 'N/A')
+                        city = addr.get('city', 'N/A')
+                        value = prop.get('valuation', {}).get('market_value', 'N/A')
+                        console.print(f"  {prop['account_id']}: {street}, {city} - ${value:,}" if isinstance(value, (int, float)) else f"  {prop['account_id']}: {street}, {city} - {value}")
+                
+                return
+            
+            # Initialize Harris normalizer
+            normalizer = HarrisCountyNormalizer(harris_config)
+            
+            # Load and normalize Harris data
+            console.print(f"\n[blue]📊 Loading and normalizing {sample_size:,} Harris County properties...[/blue]")
+            normalized_records = normalizer.load_and_normalize_sample(sample_size)
+            
+            if not normalized_records:
+                console.print("[red]No records were normalized[/red]")
+                return
+            
+            console.print(f"[green]✅ Successfully normalized {len(normalized_records):,} records[/green]")
+            
+            # Save to MongoDB
+            batch_id = batch_id or f"harris_frontend_{len(normalized_records)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            console.print(f"\n[blue]💾 Saving to MongoDB with batch ID: {batch_id}[/blue]")
+            
+            result = mongodb.save_properties(
+                normalized_records, 
+                batch_id=batch_id,
+                source_files=['real_acct.txt', 'owners.txt', 'deeds.txt']
+            )
+            
+            console.print(f"\n[bold green]🎉 Successfully loaded Harris County sample for frontend![/bold green]")
+            console.print(f"📊 Batch ID: {result['batch_id']}")
+            console.print(f"💾 Properties: {result['saved_count']:,}")
+            console.print(f"📅 Timestamp: {result['timestamp']}")
+            
+            # Show collection stats
+            stats = mongodb.get_collection_stats()
+            console.print(f"\n[blue]📈 Database Status:[/blue]")
+            console.print(f"   Total properties: {stats['properties_count']:,}")
+            console.print(f"   Harris County: {mongodb.properties_collection.count_documents({'county': 'harris'}):,}")
+            console.print(f"   Processing logs: {stats['logs_count']:,}")
+            
+            # Data quality analysis for frontend
+            console.print(f"\n[bold cyan]📋 Frontend Data Quality Report:[/bold cyan]")
+            
+            # Sample analysis for key fields
+            sample_records = normalized_records[:100]  # Analyze first 100 for speed
+            
+            # Address coverage
+            address_coverage = sum(1 for r in sample_records if r.get('property_address', {}).get('street_address'))
+            console.print(f"   📍 Property Addresses: {address_coverage}/{len(sample_records)} ({address_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Owner coverage
+            owner_coverage = sum(1 for r in sample_records if r.get('mailing_address', {}).get('name'))
+            console.print(f"   👤 Owner Names: {owner_coverage}/{len(sample_records)} ({owner_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Valuation coverage
+            valuation_coverage = sum(1 for r in sample_records if r.get('valuation', {}).get('market_value'))
+            console.print(f"   💰 Market Values: {valuation_coverage}/{len(sample_records)} ({valuation_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Tax entities coverage
+            tax_entities_coverage = sum(1 for r in sample_records if r.get('tax_entities'))
+            console.print(f"   🏛️ Tax Entities: {tax_entities_coverage}/{len(sample_records)} ({tax_entities_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Improvements coverage
+            improvements_coverage = sum(1 for r in sample_records if r.get('improvements'))
+            console.print(f"   🏗️ Improvements: {improvements_coverage}/{len(sample_records)} ({improvements_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Sample data preview for frontend
+            console.print(f"\n[bold blue]🔍 Frontend Data Preview:[/bold blue]")
+            preview_records = normalized_records[:3]
+            
+            for i, record in enumerate(preview_records, 1):
+                console.print(f"\n  [cyan]Record {i}:[/cyan]")
+                console.print(f"    Account ID: {record.get('account_id', 'N/A')}")
+                console.print(f"    Owner: {record.get('mailing_address', {}).get('name', 'N/A')}")
+                console.print(f"    Address: {record.get('property_address', {}).get('street_address', 'N/A')}, {record.get('property_address', {}).get('city', 'N/A')}")
+                console.print(f"    Market Value: ${record.get('valuation', {}).get('market_value', 'N/A'):,}" if isinstance(record.get('valuation', {}).get('market_value'), (int, float)) else f"    Market Value: {record.get('valuation', {}).get('market_value', 'N/A')}")
+                console.print(f"    Tax Entities: {len(record.get('tax_entities', []))}")
+                console.print(f"    Improvements: {len(record.get('improvements', []))}")
+            
+            # Frontend access instructions
+            console.print(f"\n[bold green]🚀 Frontend Access:[/bold green]")
+            console.print(f"   🌐 Web App: http://localhost:5000")
+            console.print(f"   📊 API Endpoint: /api/properties?county=harris&limit={min(sample_size, 1000)}")
+            console.print(f"   📈 Stats: /api/stats")
+            console.print(f"   🔍 Filter by county: 'harris' in the frontend dropdown")
+            
+        finally:
+            mongodb.disconnect()
+            
+    except Exception as e:
+        console.print(f"[red]Error during Harris County frontend sample loading: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--sample-size', default=5000, help='Number of random properties to sample and load')
+@click.option('--batch-id', help='Custom batch ID for tracking')
+@click.option('--mongo-uri', help='MongoDB connection URI (overrides environment)')
+@click.option('--database', help='MongoDB database name (overrides environment)')
+@click.option('--force-reload', is_flag=True, help='Force reload even if data exists')
+@click.pass_context
+def load_travis_sample_for_frontend(ctx, sample_size, batch_id, mongo_uri, database, force_reload):
+    """Load a random sample of Travis County properties into MongoDB for frontend review."""
+    console = ctx.obj['console']
+    
+    try:
+        from ..models.config import Config
+        travis_config = Config()
+        travis_config.county_type = "travis"  # Ensure Travis County mode
+        
+        console.print(f"[bold blue]🏛️ Travis County Frontend Sample Loader[/bold blue]")
+        console.print(f"🎯 Target: {sample_size:,} random properties for frontend review")
+        
+        # Check if we already have Travis County data
+        from ..services import MongoDBService
+        mongodb = MongoDBService(mongo_uri=mongo_uri, database=database)
+        
+        if not mongodb.connect():
+            raise click.ClickException("Failed to connect to MongoDB")
+        
+        try:
+            # Check existing Travis County data
+            existing_travis_count = mongodb.properties_collection.count_documents({'county': 'travis'})
+            
+            if existing_travis_count > 0 and not force_reload:
+                console.print(f"[yellow]⚠️ Found {existing_travis_count:,} existing Travis County properties[/yellow]")
+                console.print("[yellow]Use --force-reload to replace existing data[/yellow]")
+                
+                # Show sample of existing data
+                sample_existing = list(mongodb.properties_collection.find(
+                    {'county': 'travis'}, 
+                    {'account_id': 1, 'property_address': 1, 'valuation': 1}
+                ).limit(5))
+                
+                if sample_existing:
+                    console.print(f"\n[blue]📋 Sample of existing data:[/blue]")
+                    for prop in sample_existing:
+                        addr = prop.get('property_address', {})
+                        street = addr.get('street_address', 'N/A')
+                        city = addr.get('city', 'N/A')
+                        value = prop.get('valuation', {}).get('market_value', 'N/A')
+                        console.print(f"  {prop['account_id']}: {street}, {city} - ${value:,}" if isinstance(value, (int, float)) else f"  {prop['account_id']}: {street}, {city} - {value}")
+                
+                return
+            
+            # Initialize Travis normalizer
+            normalizer = TravisCountyNormalizer(travis_config)
+            
+            # Load and normalize Travis data
+            console.print(f"\n[blue]📊 Loading and normalizing {sample_size:,} Travis County properties...[/blue]")
+            normalized_records = normalizer.load_and_normalize_sample(sample_size)
+            
+            if not normalized_records:
+                console.print("[red]No records were normalized[/red]")
+                return
+            
+            console.print(f"[green]✅ Successfully normalized {len(normalized_records):,} records[/green]")
+            
+            # Save to MongoDB
+            batch_id = batch_id or f"travis_frontend_{len(normalized_records)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            console.print(f"\n[blue]💾 Saving to MongoDB with batch ID: {batch_id}[/blue]")
+            
+            result = mongodb.save_properties(
+                normalized_records, 
+                batch_id=batch_id,
+                source_files=['PROP.TXT', 'PROP_ENT.TXT', 'IMP_DET.TXT', 'LAND_DET.TXT', 'AGENT.TXT']
+            )
+            
+            console.print(f"\n[bold green]🎉 Successfully loaded Travis County sample for frontend![/bold green]")
+            console.print(f"📊 Batch ID: {result['batch_id']}")
+            console.print(f"💾 Properties: {result['saved_count']:,}")
+            console.print(f"📅 Timestamp: {result['timestamp']}")
+            
+            # Show collection stats
+            stats = mongodb.get_collection_stats()
+            console.print(f"\n[blue]📈 Database Status:[/blue]")
+            console.print(f"   Total properties: {stats['properties_count']:,}")
+            console.print(f"   Travis County: {mongodb.properties_collection.count_documents({'county': 'travis'}):,}")
+            console.print(f"   Processing logs: {stats['logs_count']:,}")
+            
+            # Data quality analysis for frontend
+            console.print(f"\n[bold cyan]📋 Frontend Data Quality Report:[/bold cyan]")
+            
+            # Sample analysis for key fields
+            sample_records = normalized_records[:100]  # Analyze first 100 for speed
+            
+            # Address coverage
+            address_coverage = sum(1 for r in sample_records if r.get('property_address', {}).get('street_address'))
+            console.print(f"   📍 Property Addresses: {address_coverage}/{len(sample_records)} ({address_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Owner coverage
+            owner_coverage = sum(1 for r in sample_records if r.get('mailing_address', {}).get('name'))
+            console.print(f"   👤 Owner Names: {owner_coverage}/{len(sample_records)} ({owner_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Valuation coverage
+            valuation_coverage = sum(1 for r in sample_records if r.get('valuation', {}).get('market_value'))
+            console.print(f"   💰 Market Values: {valuation_coverage}/{len(sample_records)} ({valuation_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Tax entities coverage
+            tax_entities_coverage = sum(1 for r in sample_records if r.get('tax_entities'))
+            console.print(f"   🏛️ Tax Entities: {tax_entities_coverage}/{len(sample_records)} ({tax_entities_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Improvements coverage
+            improvements_coverage = sum(1 for r in sample_records if r.get('improvements'))
+            console.print(f"   🏗️ Improvements: {improvements_coverage}/{len(sample_records)} ({improvements_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Sample data preview for frontend
+            console.print(f"\n[bold blue]🔍 Frontend Data Preview:[/bold blue]")
+            preview_records = normalized_records[:3]
+            
+            for i, record in enumerate(preview_records, 1):
+                console.print(f"\n  [cyan]Record {i}:[/cyan]")
+                console.print(f"    Account ID: {record.get('account_id', 'N/A')}")
+                console.print(f"    Owner: {record.get('mailing_address', {}).get('name', 'N/A')}")
+                console.print(f"    Address: {record.get('property_address', {}).get('street_address', 'N/A')}, {record.get('property_address', {}).get('city', 'N/A')}")
+                console.print(f"    Market Value: ${record.get('valuation', {}).get('market_value', 'N/A'):,}" if isinstance(record.get('valuation', {}).get('market_value'), (int, float)) else f"    Market Value: {record.get('valuation', {}).get('market_value', 'N/A')}")
+                console.print(f"    Tax Entities: {len(record.get('tax_entities', []))}")
+                console.print(f"    Improvements: {len(record.get('improvements', []))}")
+            
+            # Frontend access instructions
+            console.print(f"\n[bold green]🚀 Frontend Access:[/bold green]")
+            console.print(f"   🌐 Web App: http://localhost:5000")
+            console.print(f"   📊 API Endpoint: /api/properties?county=travis&limit={min(sample_size, 1000)}")
+            console.print(f"   📈 Stats: /api/stats")
+            console.print(f"   🔍 Filter by county: 'travis' in the frontend dropdown")
+            
+        finally:
+            mongodb.disconnect()
+            
+    except Exception as e:
+        console.print(f"[red]Error during Travis County frontend sample loading: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--sample-size', default=5000, help='Number of random properties to sample and load')
+@click.option('--batch-id', help='Custom batch ID for tracking')
+@click.option('--mongo-uri', help='MongoDB connection URI (overrides environment)')
+@click.option('--database', help='MongoDB database name (overrides environment)')
+@click.option('--force-reload', is_flag=True, help='Force reload even if data exists')
+@click.pass_context
+def load_dallas_sample_for_frontend(ctx, sample_size, batch_id, mongo_uri, database, force_reload):
+    """Load a random sample of Dallas County properties into MongoDB for frontend review."""
+    console = ctx.obj['console']
+    
+    try:
+        from ..models.config import Config
+        dallas_config = Config()
+        dallas_config.county_type = "dallas"  # Ensure Dallas County mode
+        
+        console.print(f"[bold blue]🏛️ Dallas County Frontend Sample Loader[/bold blue]")
+        console.print(f"🎯 Target: {sample_size:,} random properties for frontend review")
+        
+        # Check if we already have Dallas County data
+        from ..services import MongoDBService
+        mongodb = MongoDBService(mongo_uri=mongo_uri, database=database)
+        
+        if not mongodb.connect():
+            raise click.ClickException("Failed to connect to MongoDB")
+        
+        try:
+            # Check existing Dallas County data
+            existing_dallas_count = mongodb.properties_collection.count_documents({'county': 'dallas'})
+            
+            if existing_dallas_count > 0 and not force_reload:
+                console.print(f"[yellow]⚠️ Found {existing_dallas_count:,} existing Dallas County properties[/yellow]")
+                console.print("[yellow]Use --force-reload to replace existing data[/yellow]")
+                
+                # Show sample of existing data
+                sample_existing = list(mongodb.properties_collection.find(
+                    {'county': 'dallas'}, 
+                    {'account_id': 1, 'property_address': 1, 'valuation': 1}
+                ).limit(5))
+                
+                if sample_existing:
+                    console.print(f"\n[blue]📋 Sample of existing data:[/blue]")
+                    for prop in sample_existing:
+                        addr = prop.get('property_address', {})
+                        street = addr.get('street_address', 'N/A')
+                        city = addr.get('city', 'N/A')
+                        value = prop.get('valuation', {}).get('market_value', 'N/A')
+                        console.print(f"  {prop['account_id']}: {street}, {city} - ${value:,}" if isinstance(value, (int, float)) else f"  {prop['account_id']}: {street}, {city} - {value}")
+                
+                return
+            
+            # Initialize Dallas normalizer
+            normalizer = DallasCountyNormalizer(dallas_config)
+            
+            # Load and normalize Dallas data
+            console.print(f"\n[blue]📊 Loading and normalizing {sample_size:,} Dallas County properties...[/blue]")
+            normalized_records = normalizer.load_and_normalize_sample(sample_size)
+            
+            if not normalized_records:
+                console.print("[red]No records were normalized[/red]")
+                return
+            
+            console.print(f"[green]✅ Successfully normalized {len(normalized_records):,} records[/green]")
+            
+            # Save to MongoDB
+            batch_id = batch_id or f"dallas_frontend_{len(normalized_records)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            console.print(f"\n[blue]💾 Saving to MongoDB with batch ID: {batch_id}[/blue]")
+            
+            result = mongodb.save_properties(
+                normalized_records, 
+                batch_id=batch_id,
+                source_files=['ACCOUNT_INFO.CSV', 'ACCOUNT_APPRL_YEAR.CSV', 'MULTI_OWNER.CSV']
+            )
+            
+            console.print(f"\n[bold green]🎉 Successfully loaded Dallas County sample for frontend![/bold green]")
+            console.print(f"📊 Batch ID: {result['batch_id']}")
+            console.print(f"💾 Properties: {result['saved_count']:,}")
+            console.print(f"📅 Timestamp: {result['timestamp']}")
+            
+            # Show collection stats
+            stats = mongodb.get_collection_stats()
+            console.print(f"\n[blue]📈 Database Status:[/blue]")
+            console.print(f"   Total properties: {stats['properties_count']:,}")
+            console.print(f"   Dallas County: {mongodb.properties_collection.count_documents({'county': 'dallas'}):,}")
+            console.print(f"   Processing logs: {stats['logs_count']:,}")
+            
+            # Data quality analysis for frontend
+            console.print(f"\n[bold cyan]📋 Frontend Data Quality Report:[/bold cyan]")
+            
+            # Sample analysis for key fields
+            sample_records = normalized_records[:100]  # Analyze first 100 for speed
+            
+            # Address coverage
+            address_coverage = sum(1 for r in sample_records if r.get('property_address', {}).get('street_address'))
+            console.print(f"   📍 Property Addresses: {address_coverage}/{len(sample_records)} ({address_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Owner coverage
+            owner_coverage = sum(1 for r in sample_records if r.get('mailing_address', {}).get('name'))
+            console.print(f"   👤 Owner Names: {owner_coverage}/{len(sample_records)} ({owner_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Valuation coverage
+            valuation_coverage = sum(1 for r in sample_records if r.get('valuation', {}).get('market_value'))
+            console.print(f"   💰 Market Values: {valuation_coverage}/{len(sample_records)} ({valuation_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Tax entities coverage
+            tax_entities_coverage = sum(1 for r in sample_records if r.get('tax_entities'))
+            console.print(f"   🏛️ Tax Entities: {tax_entities_coverage}/{len(sample_records)} ({tax_entities_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Improvements coverage
+            improvements_coverage = sum(1 for r in sample_records if r.get('improvements'))
+            console.print(f"   🏗️ Improvements: {improvements_coverage}/{len(sample_records)} ({improvements_coverage/len(sample_records)*100:.1f}%)")
+            
+            # Sample data preview for frontend
+            console.print(f"\n[bold blue]🔍 Frontend Data Preview:[/bold blue]")
+            preview_records = normalized_records[:3]
+            
+            for i, record in enumerate(preview_records, 1):
+                console.print(f"\n  [cyan]Record {i}:[/cyan]")
+                console.print(f"    Account ID: {record.get('account_id', 'N/A')}")
+                console.print(f"    Owner: {record.get('mailing_address', {}).get('name', 'N/A')}")
+                console.print(f"    Address: {record.get('property_address', {}).get('street_address', 'N/A')}, {record.get('property_address', {}).get('city', 'N/A')}")
+                console.print(f"    Market Value: ${record.get('valuation', {}).get('market_value', 'N/A'):,}" if isinstance(record.get('valuation', {}).get('market_value'), (int, float)) else f"    Market Value: {record.get('valuation', {}).get('market_value', 'N/A')}")
+                console.print(f"    Tax Entities: {len(record.get('tax_entities', []))}")
+                console.print(f"    Improvements: {len(record.get('improvements', []))}")
+            
+            # Frontend access instructions
+            console.print(f"\n[bold green]🚀 Frontend Access:[/bold green]")
+            console.print(f"   🌐 Web App: http://localhost:5000")
+            console.print(f"   📊 API Endpoint: /api/properties?county=dallas&limit={min(sample_size, 1000)}")
+            console.print(f"   📈 Stats: /api/stats")
+            console.print(f"   🔍 Filter by county: 'dallas' in the frontend dropdown")
+            
+        finally:
+            mongodb.disconnect()
+            
+    except Exception as e:
+        console.print(f"[red]Error during Dallas County frontend sample loading: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--travis-size', default=1000, help='Number of Travis County properties to load (default: 1000)')
+@click.option('--dallas-size', default=1000, help='Number of Dallas County properties to load (default: 1000)')
+@click.option('--harris-size', default=1000, help='Number of Harris County properties to load (default: 1000)')
+@click.option('--batch-id', help='Custom batch ID for tracking all counties')
+@click.option('--mongo-uri', help='MongoDB connection URI (overrides environment)')
+@click.option('--database', help='MongoDB database name (overrides environment)')
+@click.option('--parallel', is_flag=True, help='Process counties in parallel (future enhancement)')
+@click.option('--force-reload', is_flag=True, help='Force reload even if data exists')
+@click.pass_context
+def load_all_counties_for_frontend(ctx, travis_size, dallas_size, harris_size, batch_id, mongo_uri, database, parallel, force_reload):
+    """Load samples from all counties into MongoDB for frontend review. Default: 1000 properties from each county."""
+    console = ctx.obj['console']
+    
+    console.print(f"[bold blue]🏛️ Multi-County Frontend Sample Loader[/bold blue]")
+    console.print(f"🎯 Target: {travis_size:,} Travis + {dallas_size:,} Dallas + {harris_size:,} Harris = {travis_size + dallas_size + harris_size:,} total properties")
+    
+    if parallel:
+        console.print("[yellow]⚠️  Parallel processing not yet implemented - processing sequentially[/yellow]")
+    
+    # Generate unified batch ID
+    batch_id = batch_id or f"multi_county_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    console.print(f"📊 Unified Batch ID: {batch_id}")
+    
+    # Track results for all counties
+    results = {}
+    total_loaded = 0
+    
+    try:
+        # Test MongoDB connection first
+        from ..services import MongoDBService
+        mongodb = MongoDBService(mongo_uri=mongo_uri, database=database)
+        
+        if not mongodb.connect():
+            raise click.ClickException("Failed to connect to MongoDB")
+        
+        try:
+            # Process Travis County
+            if travis_size > 0:
+                console.print(f"\n[bold cyan]🏛️ Processing Travis County ({travis_size:,} properties)[/bold cyan]")
+                try:
+                    from ..models.config import Config
+                    travis_config = Config()
+                    travis_config.county_type = "travis"
+                    
+                    normalizer = TravisCountyNormalizer(travis_config)
+                    normalized_records = normalizer.load_and_normalize_sample(travis_size)
+                    
+                    if normalized_records:
+                        result = mongodb.save_properties(
+                            normalized_records,
+                            batch_id=f"{batch_id}_travis",
+                            source_files=['PROP.TXT', 'PROP_ENT.TXT', 'IMP_DET.TXT', 'LAND_DET.TXT', 'AGENT.TXT']
+                        )
+                        results['travis'] = result
+                        total_loaded += result['saved_count']
+                        console.print(f"[green]✅ Travis County: {result['saved_count']:,} properties loaded[/green]")
+                    else:
+                        results['travis'] = {'error': 'No records normalized'}
+                        console.print("[red]❌ Travis County: No records normalized[/red]")
+                        
+                except Exception as e:
+                    results['travis'] = {'error': str(e)}
+                    console.print(f"[red]❌ Travis County failed: {e}[/red]")
+            
+            # Process Dallas County
+            if dallas_size > 0:
+                console.print(f"\n[bold cyan]🏛️ Processing Dallas County ({dallas_size:,} properties)[/bold cyan]")
+                try:
+                    from ..models.config import Config
+                    dallas_config = Config()
+                    dallas_config.county_type = "dallas"
+                    
+                    normalizer = DallasCountyNormalizer(dallas_config)
+                    normalized_records = normalizer.load_and_normalize_sample(dallas_size)
+                    
+                    if normalized_records:
+                        result = mongodb.save_properties(
+                            normalized_records,
+                            batch_id=f"{batch_id}_dallas",
+                            source_files=['ACCOUNT_INFO.CSV', 'ACCOUNT_APPRL_YEAR.CSV', 'MULTI_OWNER.CSV']
+                        )
+                        results['dallas'] = result
+                        total_loaded += result['saved_count']
+                        console.print(f"[green]✅ Dallas County: {result['saved_count']:,} properties loaded[/green]")
+                    else:
+                        results['dallas'] = {'error': 'No records normalized'}
+                        console.print("[red]❌ Dallas County: No records normalized[/red]")
+                        
+                except Exception as e:
+                    results['dallas'] = {'error': str(e)}
+                    console.print(f"[red]❌ Dallas County failed: {e}[/red]")
+            
+            # Process Harris County
+            if harris_size > 0:
+                console.print(f"\n[bold cyan]🏛️ Processing Harris County ({harris_size:,} properties)[/bold cyan]")
+                try:
+                    from ..models.config import Config
+                    harris_config = Config()
+                    harris_config.county_type = "harris"
+                    
+                    normalizer = HarrisCountyNormalizer(harris_config)
+                    normalized_records = normalizer.load_and_normalize_sample(harris_size)
+                    
+                    if normalized_records:
+                        result = mongodb.save_properties(
+                            normalized_records,
+                            batch_id=f"{batch_id}_harris",
+                            source_files=['real_acct.txt', 'owners.txt', 'deeds.txt']
+                        )
+                        results['harris'] = result
+                        total_loaded += result['saved_count']
+                        console.print(f"[bold green]✅ Harris County: {result['saved_count']:,} properties loaded[/bold green]")
+                    else:
+                        results['harris'] = {'error': 'No records normalized'}
+                        console.print("[red]❌ Harris County: No records normalized[/red]")
+                        
+                except Exception as e:
+                    results['harris'] = {'error': str(e)}
+                    console.print(f"[red]❌ Harris County failed: {e}[/red]")
+            
+            # Summary report
+            console.print(f"\n" + "=" * 60)
+            console.print(f"[bold green]🎉 Multi-County Loading Complete![/bold green]")
+            console.print(f"📊 Total Properties Loaded: {total_loaded:,}")
+            console.print(f"📅 Batch ID: {batch_id}")
+            
+            # County-by-county summary
+            console.print(f"\n[bold cyan]📋 County Summary:[/bold cyan]")
+            for county, result in results.items():
+                if 'error' in result:
+                    console.print(f"   {county.title()}: ❌ {result['error']}")
+                else:
+                    console.print(f"   {county.title()}: ✅ {result['saved_count']:,} properties")
+            
+            # Database status
+            stats = mongodb.get_collection_stats()
+            console.print(f"\n[blue]📈 Database Status:[/blue]")
+            console.print(f"   Total properties: {stats['properties_count']:,}")
+            console.print(f"   Travis County: {mongodb.properties_collection.count_documents({'county': 'travis'}):,}")
+            console.print(f"   Dallas County: {mongodb.properties_collection.count_documents({'county': 'dallas'}):,}")
+            console.print(f"   Harris County: {mongodb.properties_collection.count_documents({'county': 'harris'}):,}")
+            
+            # Frontend access instructions
+            console.print(f"\n[bold green]🚀 Frontend Access:[/bold green]")
+            console.print(f"   🌐 Web App: http://localhost:5000")
+            console.print(f"   📊 API Endpoint: /api/properties?limit=1000")
+            console.print(f"   📈 Stats: /api/stats")
+            console.print(f"   🔍 Filter by county in the frontend dropdown")
+            
+            # Future scalability notes
+            if parallel:
+                console.print(f"\n[bold yellow]💡 Future Enhancement:[/bold yellow]")
+                console.print(f"   Parallel processing will be implemented for faster loading")
+                console.print(f"   Estimated time savings: 60-70% with parallel processing")
+            
+        finally:
+            mongodb.disconnect()
+            
+    except Exception as e:
+        console.print(f"[red]❌ Multi-county loading failed: {e}[/red]")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--force-reload', is_flag=True, help='Force reload even if data exists')
+@click.option('--mongo-uri', help='MongoDB connection URI (overrides environment)')
+@click.option('--database', help='MongoDB database name (overrides environment)')
+@click.pass_context
+def load_frontend_data(ctx, force_reload, mongo_uri, database):
+    """Load 1000 properties from each county into MongoDB for frontend review (default command)."""
+    # Call the multi-county loader with default values
+    ctx.invoke(load_all_counties_for_frontend, 
+               travis_size=1000, 
+               dallas_size=1000, 
+               harris_size=1000,
+               force_reload=force_reload,
+               mongo_uri=mongo_uri,
+               database=database)
 
 
 if __name__ == "__main__":

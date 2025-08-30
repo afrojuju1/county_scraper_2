@@ -116,6 +116,56 @@ class HarrisCountyNormalizer(BaseParser):
             }
         }
     
+    def load_and_normalize_sample(self, sample_size: int) -> List[Dict[str, Any]]:
+        """
+        Load and normalize a sample of Harris County properties for frontend use.
+        
+        Args:
+            sample_size: Number of properties to load
+            
+        Returns:
+            List of normalized property records
+        """
+        try:
+            # Load primary property data with sample size limit
+            real_accounts_df = self._load_real_accounts(sample_size, use_chunking=True)
+            
+            if len(real_accounts_df) == 0:
+                self.console.print("[red]No property records found[/red]")
+                return []
+            
+            # Load related data files
+            owners_df = self._load_owners()
+            deeds_df = self._load_deeds()
+            permits_df = self._load_permits()
+            tieback_df = self._load_parcel_tieback()
+            neighborhood_df = self._load_neighborhood_codes()
+            mineral_df = self._load_mineral_rights()
+            
+            # Normalize to unified format
+            normalized_data = self._create_json_normalized_data(
+                real_accounts_df, owners_df, deeds_df, permits_df, 
+                tieback_df, neighborhood_df, mineral_df
+            )
+            
+            # Convert to list format for MongoDB
+            if isinstance(normalized_data, dict):
+                # Extract the properties list from the normalized data
+                properties = normalized_data.get('properties', [])
+                if isinstance(properties, dict):
+                    # If it's a dict keyed by account_id, convert to list
+                    properties = list(properties.values())
+                return properties
+            elif isinstance(normalized_data, list):
+                return normalized_data
+            else:
+                self.console.print(f"[yellow]Unexpected normalized data format: {type(normalized_data)}[/yellow]")
+                return []
+                
+        except Exception as e:
+            self.console.print(f"[red]Error loading Harris County sample: {e}[/red]")
+            return []
+    
     def _load_real_accounts(self, sample_size: Optional[int] = None, use_chunking: bool = True) -> pl.DataFrame:
         """Load and clean real accounts data with specialized line-ending handling."""
         file_path = self.config.get_file_path(self.config.real_accounts_file)
