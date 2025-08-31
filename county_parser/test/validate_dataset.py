@@ -16,8 +16,12 @@ from pathlib import Path
 from collections import defaultdict
 
 # Import our services
-from ..services.mongodb_service import MongoDBService
-from ..models.config import Config
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+from services.mongodb_service import MongoDBService
+from models.config import Config
 
 def validate_dataset():
     """Comprehensive validation of the multi-county dataset."""

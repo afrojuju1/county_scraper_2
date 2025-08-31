@@ -6,7 +6,6 @@ Dallas CAD provides a normalized relational CSV structure with separate files fo
 - ACCOUNT_APPRL_YEAR.CSV: Property valuations and tax jurisdictions
 - MULTI_OWNER.CSV: Additional owners with ownership percentages
 - RES_DETAIL.CSV: Residential property building details
-- COM_DETAIL.CSV: Commercial property building details
 - LAND.CSV: Land characteristics and zoning information
 - Various exemption files
 
@@ -48,7 +47,6 @@ class DallasCountyNormalizer:
             'account_apprl': dallas_data_dir / 'ACCOUNT_APPRL_YEAR.CSV', 
             'multi_owner': dallas_data_dir / 'MULTI_OWNER.CSV',
             'res_detail': dallas_data_dir / 'RES_DETAIL.CSV',
-            'com_detail': dallas_data_dir / 'COM_DETAIL.CSV',  # Added commercial details
             'land_detail': dallas_data_dir / 'LAND.CSV',
             'taxable_object': dallas_data_dir / 'TAXABLE_OBJECT.CSV',
             'exemptions': dallas_data_dir / 'ACCT_EXEMPT_VALUE.CSV'
@@ -148,7 +146,6 @@ class DallasCountyNormalizer:
         account_apprl_df = self._load_and_filter_csv(self.files['account_apprl'], target_account_ids, 'ACCOUNT_NUM')
         multi_owner_df = self._load_and_filter_csv(self.files['multi_owner'], target_account_ids, 'ACCOUNT_NUM')  
         res_detail_df = self._load_and_filter_csv(self.files['res_detail'], target_account_ids, 'ACCOUNT_NUM')
-        com_detail_df = self._load_and_filter_csv(self.files['com_detail'], target_account_ids, 'ACCOUNT_NUM')  # Added commercial details
         land_detail_df = self._load_and_filter_csv(self.files['land_detail'], target_account_ids, 'ACCOUNT_NUM')
         
         if account_apprl_df is not None:
@@ -162,10 +159,6 @@ class DallasCountyNormalizer:
         if res_detail_df is not None:
             res_detail_df['account_id_norm'] = res_detail_df['ACCOUNT_NUM'].apply(normalize_dallas_account_id)
             self.console.print(f"✅ Loaded {len(res_detail_df):,} residential detail records (filtered)")
-        
-        if com_detail_df is not None:
-            com_detail_df['account_id_norm'] = com_detail_df['ACCOUNT_NUM'].apply(normalize_dallas_account_id)
-            self.console.print(f"✅ Loaded {len(com_detail_df):,} commercial detail records (filtered)")
         
         if land_detail_df is not None:
             land_detail_df['account_id_norm'] = land_detail_df['ACCOUNT_NUM'].apply(normalize_dallas_account_id)
@@ -199,13 +192,6 @@ class DallasCountyNormalizer:
                 if len(res_matches) > 0:
                     res_data = res_matches.iloc[0]
             
-            # Get commercial details
-            com_data = None
-            if com_detail_df is not None:
-                com_matches = com_detail_df[com_detail_df['account_id_norm'] == account_id]
-                if len(com_matches) > 0:
-                    com_data = com_matches.iloc[0]
-            
             # Get land details
             land_data = None
             if land_detail_df is not None:
@@ -215,7 +201,7 @@ class DallasCountyNormalizer:
             
             # Create unified record
             unified_record = self._map_to_unified_model(
-                account_row, apprl_data, additional_owners, res_data, com_data, land_data
+                account_row, apprl_data, additional_owners, res_data, land_data
             )
             
             normalized_records.append(unified_record)
@@ -284,7 +270,6 @@ class DallasCountyNormalizer:
         apprl_data: Optional[pd.Series],
         additional_owners: List[Dict[str, Any]],
         res_data: Optional[pd.Series],
-        com_data: Optional[pd.Series],
         land_data: Optional[pd.Series]
     ) -> Dict[str, Any]:
         """Map Dallas CAD data to unified JSON model."""
@@ -319,7 +304,6 @@ class DallasCountyNormalizer:
         # Build property details
         property_details = {
             "division_code": self._safe_str(account_row.get('DIVISION_CD', '')),
-            "property_type": self._map_division_to_property_type(account_row.get('DIVISION_CD', '')),
             "business_name": self._safe_str(account_row.get('BIZ_NAME', '')),
             "neighborhood_code": self._safe_str(account_row.get('NBHD_CD', '')),
             "map_reference": self._safe_str(account_row.get('MAPSCO', '')),
@@ -340,30 +324,13 @@ class DallasCountyNormalizer:
                 "num_half_baths": self._safe_int(res_data.get('NUM_HALF_BATHS'))
             })
         
-        # Add commercial details if available
-        if com_data is not None:
-            property_details.update({
-                "commercial_area_sf": self._safe_int(com_data.get('GROSS_BLDG_AREA')),
-                "net_lease_area": self._safe_int(com_data.get('NET_LEASE_AREA')),
-                "property_name": self._safe_str(com_data.get('PROPERTY_NAME', '')),
-                "property_quality": self._safe_str(com_data.get('PROPERTY_QUAL_DESC', '')),
-                "property_condition": self._safe_str(com_data.get('PROPERTY_COND_DESC', '')),
-                "commercial_year_built": self._safe_int(com_data.get('YEAR_BUILT')),
-                "commercial_remodel_year": self._safe_int(com_data.get('REMODEL_YEAR')),
-                "commercial_stories": self._safe_int(com_data.get('NUM_STORIES')),
-                "commercial_construction_type": self._safe_str(com_data.get('CONSTR_TYP_DESC', '')),
-                "commercial_heating_type": self._safe_str(com_data.get('HEATING_TYP_DESC', '')),
-                "commercial_ac_type": self._safe_str(com_data.get('AC_TYP_DESC', '')),
-                "commercial_num_units": self._safe_int(com_data.get('NUM_UNITS'))
-            })
-        
         # Add land details if available  
         if land_data is not None:
             property_details.update({
                 "zoning": self._safe_str(land_data.get('ZONING', '')),
                 "land_area_sf": self._safe_float(land_data.get('AREA_SIZE')),
-                "front_dimension": self._safe_float(land_data.get('FRONT_DIM', 0)),
-                "depth_dimension": self._safe_float(land_data.get('DEPTH_DIM', 0))
+                "front_dimension": self._safe_float(land_data.get('FRONT_DIM')),
+                "depth_dimension": self._safe_float(land_data.get('DEPTH_DIM'))
             })
         
         # Build valuation data
@@ -382,25 +349,23 @@ class DallasCountyNormalizer:
         tax_entities = []
         if apprl_data is not None:
             jurisdictions = [
-                ('CITY', 'CITY_JURIS_DESC', 'CITY_TAXABLE_VAL', 'CITY_SPLIT_PCT'),
-                ('COUNTY', 'COUNTY_JURIS_DESC', 'COUNTY_TAXABLE_VAL', 'COUNTY_SPLIT_PCT'),
-                ('ISD', 'ISD_JURIS_DESC', 'ISD_TAXABLE_VAL', 'ISD_SPLIT_PCT'),
-                ('HOSPITAL', 'HOSPITAL_JURIS_DESC', 'HOSPITAL_TAXABLE_VAL', 'HOSPITAL_SPLIT_PCT'),
-                ('COLLEGE', 'COLLEGE_JURIS_DESC', 'COLLEGE_TAXABLE_VAL', 'COLLEGE_SPLIT_PCT'),
-                ('SPECIAL_DIST', 'SPECIAL_DIST_JURIS_DESC', 'SPECIAL_DIST_TAXABLE_VAL', 'SPECIAL_DIST_SPLIT_PCT')
+                ('CITY', 'city_juris_desc', 'city_taxable_val'),
+                ('COUNTY', 'county_juris_desc', 'county_taxable_val'),
+                ('ISD', 'isd_juris_desc', 'isd_taxable_val'),
+                ('HOSPITAL', 'hospital_juris_desc', 'hospital_taxable_val'),
+                ('COLLEGE', 'college_juris_desc', 'college_taxable_val'),
+                ('SPECIAL_DIST', 'special_dist_juris_desc', 'special_dist_taxable_val')
             ]
             
-            for entity_type, desc_col, taxable_col, split_col in jurisdictions:
-                entity_desc = self._safe_str(apprl_data.get(desc_col, ''))
-                taxable_val = self._safe_int(apprl_data.get(taxable_col, 0))
-                split_pct = self._safe_float(apprl_data.get(split_col, 0))
+            for entity_type, desc_col, taxable_col in jurisdictions:
+                entity_desc = self._safe_str(apprl_data.get(desc_col.upper(), ''))
+                taxable_val = self._safe_int(apprl_data.get(taxable_col.upper(), 0))
                 
                 if entity_desc and entity_desc != 'UNASSIGNED':
                     tax_entities.append({
                         "entity_name": entity_desc,
                         "entity_type": entity_type,
                         "taxable_value": taxable_val,
-                        "split_percentage": split_pct,
                         "jurisdiction_id": None  # Dallas doesn't provide separate jurisdiction IDs
                     })
         
@@ -438,7 +403,7 @@ class DallasCountyNormalizer:
             "tax_entities": tax_entities,
             "owners": owners,
             # Add improvements field for unified schema compatibility
-            "improvements": self._build_improvements(account_row, res_data, com_data),
+            "improvements": self._build_improvements(account_row, res_data),
             # Add land details field for unified schema compatibility  
             "land_details": self._build_land_details(account_row, land_data),
             "metadata": {
@@ -451,62 +416,22 @@ class DallasCountyNormalizer:
         
         return unified_record
 
-    def _build_improvements(self, account_row: pd.Series, res_data: Optional[pd.Series], com_data: Optional[pd.Series]) -> List[Dict[str, Any]]:
+    def _build_improvements(self, account_row: pd.Series, res_data: Optional[pd.Series]) -> List[Dict[str, Any]]:
         """Build improvements list for unified schema compatibility."""
         improvements = []
         
         if res_data is not None:
             # Main building improvement
             if res_data.get('TOT_LIVING_AREA_SF') or res_data.get('YR_BUILT'):
-                main_building = {
+                improvements.append({
                     "improvement_id": f"{account_row.get('ACCOUNT_NUM', '')}_MAIN",
                     "improvement_type": "Main Building",
                     "improvement_class": self._safe_str(res_data.get('BLDG_CLASS_DESC', '')),
                     "year_built": self._safe_int(res_data.get('YR_BUILT')),
-                    "effective_year_built": self._safe_int(res_data.get('EFF_YR_BUILT')),
                     "square_footage": self._safe_int(res_data.get('TOT_LIVING_AREA_SF')),
-                    "total_area": self._safe_int(res_data.get('TOT_MAIN_SF')),
-                    "stories": self._safe_str(res_data.get('NUM_STORIES_DESC', '')),
-                    "construction_type": self._safe_str(res_data.get('CONSTR_FRAM_TYP_DESC', '')),
-                    "foundation_type": self._safe_str(res_data.get('FOUNDATION_TYP_DESC', '')),
-                    "heating_type": self._safe_str(res_data.get('HEATING_TYP_DESC', '')),
-                    "ac_type": self._safe_str(res_data.get('AC_TYP_DESC', '')),
-                    "bedrooms": self._safe_int(res_data.get('NUM_BEDROOMS')),
-                    "full_baths": self._safe_int(res_data.get('NUM_FULL_BATHS')),
-                    "half_baths": self._safe_int(res_data.get('NUM_HALF_BATHS')),
-                    "fireplaces": self._safe_int(res_data.get('NUM_FIREPLACES')),
-                    "kitchens": self._safe_int(res_data.get('NUM_KITCHENS')),
-                    "wet_bars": self._safe_int(res_data.get('NUM_WET_BARS')),
-                    "amenities": {
-                        "pool": res_data.get('POOL_IND') == 'Y',
-                        "spa": res_data.get('SPA_IND') == 'Y',
-                        "deck": res_data.get('DECK_IND') == 'Y',
-                        "sprinkler": res_data.get('SPRINKLER_SYS_IND') == 'Y',
-                        "sauna": res_data.get('SAUNA_IND') == 'Y'
-                    },
-                    "exterior_features": {
-                        "fence_type": self._safe_str(res_data.get('FENCE_TYP_DESC', '')),
-                        "exterior_wall": self._safe_str(res_data.get('EXT_WALL_DESC', '')),
-                        "basement": self._safe_str(res_data.get('BASEMENT_DESC', '')),
-                        "roof_type": self._safe_str(res_data.get('ROOF_TYP_DESC', '')),
-                        "roof_material": self._safe_str(res_data.get('ROOF_MAT_DESC', ''))
-                    },
-                    "mobile_home_info": {
-                        "serial_number": self._safe_str(res_data.get('MBL_HOME_SER_NUM', '')),
-                        "manufacturer": self._safe_str(res_data.get('MBL_HOME_MANUFCTR', '')),
-                        "length": self._safe_float(res_data.get('MBL_HOME_LENGTH', 0)),
-                        "width": self._safe_float(res_data.get('MBL_HOME_WIDTH', 0)),
-                        "space": self._safe_float(res_data.get('MBL_HOME_SPACE', 0))
-                    },
-                    "completion": {
-                        "percent_complete": self._safe_float(res_data.get('PCT_COMPLETE', 0)),
-                        "depreciation_percent": self._safe_float(res_data.get('DEPRECIATION_PCT', 0)),
-                        "num_units": self._safe_int(res_data.get('NUM_UNITS', 1))
-                    },
                     "value": self._safe_int(res_data.get('IMPR_VAL', 0)),
                     "description": f"{self._safe_str(res_data.get('BLDG_CLASS_DESC', 'Building'))} - {self._safe_str(res_data.get('NUM_STORIES_DESC', ''))} stories"
-                }
-                improvements.append(main_building)
+                })
             
             # Additional building features
             if res_data.get('TOT_MAIN_SF') and res_data.get('TOT_MAIN_SF') != res_data.get('TOT_LIVING_AREA_SF'):
@@ -518,41 +443,6 @@ class DallasCountyNormalizer:
                     "value": 0,  # Value included in main building
                     "description": "Additional building area beyond living space"
                 })
-        
-        # Add commercial improvements if available
-        if com_data is not None:
-            # Main commercial building improvement
-            if com_data.get('GROSS_BLDG_AREA') or com_data.get('YEAR_BUILT'):
-                commercial_building = {
-                    "improvement_id": f"{account_row.get('ACCOUNT_NUM', '')}_COMMERCIAL",
-                    "improvement_type": "Commercial Building",
-                    "improvement_class": self._safe_str(com_data.get('BLDG_CLASS_DESC', '')),
-                    "year_built": self._safe_int(com_data.get('YEAR_BUILT')),
-                    "remodel_year": self._safe_int(com_data.get('REMODEL_YEAR')),
-                    "square_footage": self._safe_int(com_data.get('GROSS_BLDG_AREA')),
-                    "net_lease_area": self._safe_int(com_data.get('NET_LEASE_AREA')),
-                    "stories": self._safe_int(com_data.get('NUM_STORIES')),
-                    "construction_type": self._safe_str(com_data.get('CONSTR_TYP_DESC', '')),
-                    "foundation_type": self._safe_str(com_data.get('FOUNDATION_TYP_DESC', '')),
-                    "foundation_area": self._safe_int(com_data.get('FOUNDATION_AREA')),
-                    "basement_desc": self._safe_str(com_data.get('BASEMENT_DESC', '')),
-                    "basement_area": self._safe_int(com_data.get('BASEMENT_AREA')),
-                    "heating_type": self._safe_str(com_data.get('HEATING_TYP_DESC', '')),
-                    "ac_type": self._safe_str(com_data.get('AC_TYP_DESC', '')),
-                    "num_units": self._safe_int(com_data.get('NUM_UNITS')),
-                    "property_name": self._safe_str(com_data.get('PROPERTY_NAME', '')),
-                    "quality": self._safe_str(com_data.get('PROPERTY_QUAL_DESC', '')),
-                    "condition": self._safe_str(com_data.get('PROPERTY_COND_DESC', '')),
-                    "depreciation": {
-                        "physical": self._safe_float(com_data.get('PHYS_DEPR_PCT', 0)),
-                        "functional": self._safe_float(com_data.get('FUNCT_DEPR_PCT', 0)),
-                        "external": self._safe_float(com_data.get('EXTRNL_DEPR_PCT', 0)),
-                        "total": self._safe_float(com_data.get('TOT_DEPR_PCT', 0))
-                    },
-                    "value": self._safe_int(com_data.get('IMP_VAL', 0)),
-                    "description": f"Commercial Building - {self._safe_str(com_data.get('BLDG_CLASS_DESC', 'Commercial'))}"
-                }
-                improvements.append(commercial_building)
         
         # Add any other improvements from property details
         if account_row.get('BLDG_ID'):
@@ -584,17 +474,7 @@ class DallasCountyNormalizer:
             land_record.update({
                 "zoning": self._safe_str(land_data.get('ZONING', '')),
                 "front_dimension": self._safe_float(land_data.get('FRONT_DIM', 0)),
-                "depth_dimension": self._safe_float(land_data.get('DEPTH_DIM', 0)),
-                "area_size": self._safe_float(land_data.get('AREA_SIZE', 0)),
-                "area_unit": self._safe_str(land_data.get('AREA_UOM_DESC', '')),
-                "section_number": self._safe_str(land_data.get('SECTION_NUM', '')),
-                "sptd_code": self._safe_str(land_data.get('SPTD_CD', '')),
-                "sptd_description": self._safe_str(land_data.get('SPTD_DESC', '')),
-                "pricing_method": self._safe_str(land_data.get('PRICING_METH_DESC', '')),
-                "cost_per_unit": self._safe_float(land_data.get('COST_PER_UOM', 0)),
-                "market_adjustment": self._safe_float(land_data.get('MARKET_ADJ_PCT', 0)),
-                "agricultural_use": land_data.get('AG_USE_IND') == 'Y',
-                "agricultural_value": self._safe_int(land_data.get('ACCT_AG_VAL_AMT', 0))
+                "depth_dimension": self._safe_float(land_data.get('DEPTH_DIM', 0))
             })
         
         land_details.append(land_record)
