@@ -395,127 +395,12 @@ class TesseractTakeoffExtractor:
                             return  # Found one, stop looking
     
     def _validate_and_estimate_rooms(self, data: Dict):
-        """Add default room estimates if we don't have enough room details"""
-        # This helps provide a more complete takeoff estimate
-        if len(data['rooms']) < 5:  # If we have fewer than 5 room types
-            total_sqft = data['total_sqft']
-            
-            # Get floor areas for better room distribution
-            first_floor_area = data['floor_areas'].get('first_floor', 0)
-            second_floor_area = data['floor_areas'].get('second_floor', 0)
-            
-            # Estimate typical rooms based on total square footage and floor distribution
-            if 'bedroom' not in data['rooms']:
-                # Estimate 2-4 bedrooms for a 2400+ sqft house
-                num_bedrooms = min(4, max(2, int(total_sqft / 600)))
-                data['rooms']['bedroom'] = []
-                for i in range(num_bedrooms):
-                    bedroom_size = 120 + (i * 20)  # 120, 140, 160, 180 sqft
-                    data['rooms']['bedroom'].append({
-                        'name': f'BEDROOM {i+1}',
-                        'area': bedroom_size,
-                        'type': 'bedroom'
-                    })
-            
-            # Check if we need to add master bathroom
-            if 'master_bathroom' not in data['rooms']:
-                # For a 3 bed 2.5 bath house, we should have a master bathroom
-                master_bath_size = 100  # Typical master bathroom size
-                data['rooms']['master_bathroom'] = {
-                    'name': 'MASTER BATHROOM',
-                    'area': master_bath_size,
-                    'type': 'master_bathroom'
-                }
-                self.logger.info(f"Added estimated master bathroom: {master_bath_size} sqft")
-            
-            if 'bathroom' not in data['rooms']:
-                # Estimate hall bathroom for a 3 bed 2.5 bath house
-                hall_bath_size = 60  # Typical hall bathroom size
-                data['rooms']['bathroom'] = [{
-                    'name': 'HALL BATHROOM',
-                    'area': hall_bath_size,
-                    'type': 'bathroom'
-                }]
-                self.logger.info(f"Added estimated hall bathroom: {hall_bath_size} sqft")
-            
-            # Check if we should convert small bathrooms to half baths based on half bath indicators
-            if 'half_bath' not in data['rooms']:
-                # Look for half bath indicators in the raw text
-                half_bath_indicators = re.findall(r'(?:HALF|POWDER|1/2|WC|W\.C\.)', data.get('raw_text', ''), re.IGNORECASE)
-                if half_bath_indicators and len(half_bath_indicators) > 3:  # Multiple indicators suggest half baths
-                    self.logger.info(f"Found {len(half_bath_indicators)} half bath indicators, converting small bathrooms...")
-                    
-                    # Convert the smallest bathroom to half bath
-                    if 'bathroom' in data['rooms'] and isinstance(data['rooms']['bathroom'], list):
-                        smallest_bath = min(data['rooms']['bathroom'], key=lambda x: x['area'])
-                        if smallest_bath['area'] <= 50:  # Small bathroom
-                            # Remove from regular bathrooms
-                            data['rooms']['bathroom'] = [r for r in data['rooms']['bathroom'] if r != smallest_bath]
-                            
-                            # Add as half bath
-                            data['rooms']['half_bath'] = [{
-                                'name': 'HALF BATH',
-                                'area': smallest_bath['area'],
-                                'type': 'half_bath'
-                            }]
-                            self.logger.info(f"Converted estimated bathroom ({smallest_bath['area']} sqft) to HALF BATH")
-            
-            # Ensure half bath is properly added if missing (for 2.5 bath houses)
-            if 'half_bath' not in data['rooms']:
-                # Add default half bath for 2.5 bath configuration
-                data['rooms']['half_bath'] = [{
-                    'name': 'HALF BATH 1',
-                    'area': 40,
-                    'type': 'half_bath'
-                }]
-                self.logger.info("Added default half bath: 40 sqft")
-            
-            if 'kitchen' not in data['rooms']:
-                # Estimate kitchen size - typically on first floor
-                kitchen_size = min(200, max(120, int(first_floor_area / 4)))
-                data['rooms']['kitchen'] = {
-                    'name': 'KITCHEN',
-                    'area': kitchen_size,
-                    'type': 'kitchen'
-                }
-            
-            if 'dining' not in data['rooms']:
-                # Estimate dining room size - typically on first floor
-                dining_size = min(150, max(80, int(first_floor_area / 6)))
-                data['rooms']['dining'] = {
-                    'name': 'DINING',
-                    'area': dining_size,
-                    'type': 'dining'
-                }
-            
-            # Add living room if not found
-            if 'living' not in data['rooms']:
-                # Estimate living room size - typically on first floor
-                living_size = min(300, max(200, int(first_floor_area / 3)))
-                data['rooms']['living'] = {
-                    'name': 'LIVING ROOM',
-                    'area': living_size,
-                    'type': 'living'
-                }
-            
-            # Add family room if we have second floor
-            if second_floor_area > 0 and 'family' not in data['rooms']:
-                family_size = min(250, max(150, int(second_floor_area / 4)))
-                data['rooms']['family'] = {
-                    'name': 'FAMILY ROOM',
-                    'area': family_size,
-                    'type': 'family'
-                }
+        """Validate extracted room data - NO ESTIMATES, only actual values from PDF"""
         
-        # Apply window count logic after processing all pages
-        min_windows = max(8, int(data['total_sqft'] / 200))
-        max_windows = int(data['total_sqft'] / 100)
-        
-        if data['fixtures']['windows'] > max_windows:
-            data['fixtures']['windows'] = min_windows
-            self.logger.warning(f"Window count {data['fixtures']['windows']} seems too high, using estimated {min_windows}")
-        else:
-            data['fixtures']['windows'] = min(max(data['fixtures']['windows'], min_windows), max_windows)
+        # Only validate window counts if they seem unrealistic - no estimates
+        if data['fixtures']['windows'] > 100:  # Unrealistic high count
+            self.logger.warning(f"Window count {data['fixtures']['windows']} seems unrealistic")
+            data['fixtures']['windows'] = 0  # Reset to 0 rather than estimate
         
         # Log validation results
         self.logger.info("=== EXTRACTED DATA VALIDATION ===")
@@ -555,100 +440,34 @@ class TesseractTakeoffExtractor:
         self.logger.info("=== END VALIDATION ===")
     
     def _validate_and_correct_unrealistic_values(self, data: Dict):
-        """Validate and correct unrealistic values based on house size and common construction practices"""
-        self.logger.info("Validating and correcting unrealistic values...")
+        """Only flag unrealistic values - NO CORRECTIONS OR ESTIMATES"""
+        self.logger.info("Validating extracted values...")
         
         total_sqft = data['total_sqft']
         if total_sqft == 0:
-            self.logger.warning("No total square footage found - skipping validation")
+            self.logger.warning("No total square footage found")
             return
         
-        # Validate wall areas
-        if 'wall_areas' in data and data['wall_areas']['total_sqft'] > 0:
-            wall_area = data['wall_areas']['total_sqft']
-            # Typical wall area is 0.8-1.5x floor area for residential
-            expected_wall_area_min = total_sqft * 0.8
-            expected_wall_area_max = total_sqft * 1.5
-            
-            if wall_area > expected_wall_area_max:
-                # Recalculate wall area based on reasonable assumptions
-                corrected_wall_area = int(total_sqft * 1.2)  # 1.2x is typical
-                data['wall_areas']['total_sqft'] = corrected_wall_area
-                data['wall_areas']['first_floor_sqft'] = int(corrected_wall_area * 0.6)
-                data['wall_areas']['second_floor_sqft'] = int(corrected_wall_area * 0.4)
-                self.logger.warning(f"Corrected unrealistic wall area: {wall_area} -> {corrected_wall_area} sqft")
-            elif wall_area < expected_wall_area_min:
-                # Recalculate wall area based on reasonable assumptions
-                corrected_wall_area = int(total_sqft * 1.2)
-                data['wall_areas']['total_sqft'] = corrected_wall_area
-                data['wall_areas']['first_floor_sqft'] = int(corrected_wall_area * 0.6)
-                data['wall_areas']['second_floor_sqft'] = int(corrected_wall_area * 0.4)
-                self.logger.warning(f"Corrected unrealistic wall area: {wall_area} -> {corrected_wall_area} sqft")
-        
-        # Validate fixture counts
+        # Only flag unrealistic values, don't correct them
         fixtures = data['fixtures']
         
-        # Window count validation
-        if fixtures['windows'] > 0:
-            # Typical: 1 window per 100-200 sqft
-            expected_windows_min = max(4, int(total_sqft / 200))
-            expected_windows_max = int(total_sqft / 100)
-            
-            if fixtures['windows'] > expected_windows_max:
-                corrected_windows = expected_windows_max
-                fixtures['windows'] = corrected_windows
-                self.logger.warning(f"Corrected unrealistic window count: {fixtures['windows']} -> {corrected_windows}")
-            elif fixtures['windows'] < expected_windows_min:
-                corrected_windows = expected_windows_min
-                fixtures['windows'] = corrected_windows
-                self.logger.warning(f"Corrected unrealistic window count: {fixtures['windows']} -> {corrected_windows}")
+        # Flag unrealistic window counts
+        if fixtures['windows'] > 100:
+            self.logger.warning(f"Window count {fixtures['windows']} seems unrealistic")
         
-        # Door count validation
-        if fixtures['doors'] > 0:
-            # Typical: 1 door per 200-400 sqft
-            expected_doors_min = max(3, int(total_sqft / 400))
-            expected_doors_max = int(total_sqft / 200)
-            
-            if fixtures['doors'] > expected_doors_max:
-                corrected_doors = expected_doors_max
-                fixtures['doors'] = corrected_doors
-                self.logger.warning(f"Corrected unrealistic door count: {fixtures['doors']} -> {corrected_doors}")
-            elif fixtures['doors'] < expected_doors_min:
-                corrected_doors = expected_doors_min
-                fixtures['doors'] = corrected_doors
-                self.logger.warning(f"Corrected unrealistic door count: {fixtures['doors']} -> {corrected_doors}")
+        # Flag unrealistic door counts  
+        if fixtures['doors'] > 50:
+            self.logger.warning(f"Door count {fixtures['doors']} seems unrealistic")
         
-        # Electrical outlet validation
-        if fixtures['electrical_outlets'] > 0:
-            # Typical: 1 outlet per 50-100 sqft
-            expected_outlets_min = max(8, int(total_sqft / 100))
-            expected_outlets_max = int(total_sqft / 50)
-            
-            if fixtures['electrical_outlets'] > expected_outlets_max:
-                corrected_outlets = expected_outlets_max
-                fixtures['electrical_outlets'] = corrected_outlets
-                self.logger.warning(f"Corrected unrealistic outlet count: {fixtures['electrical_outlets']} -> {corrected_outlets}")
-            elif fixtures['electrical_outlets'] < expected_outlets_min:
-                corrected_outlets = expected_outlets_min
-                fixtures['electrical_outlets'] = corrected_outlets
-                self.logger.warning(f"Corrected unrealistic outlet count: {fixtures['electrical_outlets']} -> {corrected_outlets}")
+        # Flag unrealistic outlet counts
+        if fixtures['electrical_outlets'] > 200:
+            self.logger.warning(f"Electrical outlet count {fixtures['electrical_outlets']} seems unrealistic")
         
-        # Plumbing fixture validation
-        if fixtures['plumbing_fixtures'] > 0:
-            # Typical: 1 fixture per 200-400 sqft
-            expected_fixtures_min = max(3, int(total_sqft / 400))
-            expected_fixtures_max = int(total_sqft / 200)
-            
-            if fixtures['plumbing_fixtures'] > expected_fixtures_max:
-                corrected_fixtures = expected_fixtures_max
-                fixtures['plumbing_fixtures'] = corrected_fixtures
-                self.logger.warning(f"Corrected unrealistic plumbing fixture count: {fixtures['plumbing_fixtures']} -> {corrected_fixtures}")
-            elif fixtures['plumbing_fixtures'] < expected_fixtures_min:
-                corrected_fixtures = expected_fixtures_min
-                fixtures['plumbing_fixtures'] = corrected_fixtures
-                self.logger.warning(f"Corrected unrealistic plumbing fixture count: {fixtures['plumbing_fixtures']} -> {corrected_fixtures}")
+        # Flag unrealistic plumbing fixture counts
+        if fixtures['plumbing_fixtures'] > 100:
+            self.logger.warning(f"Plumbing fixture count {fixtures['plumbing_fixtures']} seems unrealistic")
         
-        self.logger.info("Validation and correction completed")
+        self.logger.info("Validation completed - no corrections made")
     
     def _extract_square_footage(self, text: str, data: Dict):
         """Extract total square footage with high priority patterns"""
@@ -703,20 +522,46 @@ class TesseractTakeoffExtractor:
                 self.logger.info(f"Selected largest total square footage: {found_areas[0]} sqft")
     
     def _extract_floor_areas(self, text: str, data: Dict):
-        """Extract floor-specific areas"""
+        """Extract floor-specific areas with enhanced patterns"""
+        # Enhanced floor area patterns to catch more variations
         floor_patterns = [
+            # Standard patterns
             r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(?:LIVING|AREA)?\s*(\d+)',
-            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(\d+)\s*SQ\.?\s*FT\.?'
+            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(\d+)\s*SQ\.?\s*FT\.?',
+            # New patterns based on analysis
+            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s*:?\s*(\d+)',
+            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(\d+)\s*SF',
+            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(\d+)\s*S\.F\.',
+            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(\d+)\s*SQFT',
+            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(\d+)\s*SQUARE\s*FEET',
+            # Patterns with different spacing
+            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(\d+)\s*SQ\.?\s*FT\.?',
+            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(\d+)\s*SQ\.?\s*FT',
+            # Patterns with area indicators
+            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+AREA\s*:?\s*(\d+)',
+            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+LIVING\s*:?\s*(\d+)',
+            # Look for standalone floor numbers followed by areas
+            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(\d{3,4})\b',
+            # More flexible patterns
+            r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(\d+)(?:\s|$|\.)',
         ]
+        
+        found_floor_areas = {}
         
         for pattern in floor_patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for floor_name, area in matches:
                 floor_area = int(area)
-                if floor_area >= 100:  # Reasonable minimum
+                # More flexible minimum - some floors might be smaller
+                if floor_area >= 50:  # Lowered from 100 to catch more floors
                     floor_key = f'{floor_name.lower()}_floor'
-                    data['floor_areas'][floor_key] = floor_area
-                    self.logger.info(f"Found {floor_name} floor: {floor_area} sqft")
+                    # Only update if we haven't found this floor yet, or if this is a larger area
+                    if floor_key not in found_floor_areas or floor_area > found_floor_areas[floor_key]:
+                        found_floor_areas[floor_key] = floor_area
+                        data['floor_areas'][floor_key] = floor_area
+                        self.logger.info(f"Found {floor_name} floor: {floor_area} sqft")
+        
+        # Only extract actual floor areas from the PDF - no estimates
     
     def _extract_room_data(self, text: str, data: Dict):
         """Extract room-specific data using sophisticated patterns from takeoff_estimator.py"""
@@ -1217,50 +1062,35 @@ class TesseractTakeoffExtractor:
         return False
     
     def _add_default_ceiling_heights(self, data: Dict):
-        """Add default ceiling heights if none were extracted (CRITICAL for material estimates)"""
+        """Only extract actual ceiling heights from PDF - NO DEFAULTS"""
         if not data['ceiling_heights']:
-            # Standard residential ceiling heights based on floor
-            first_floor_height = 10.0  # 10 feet for first floor
-            second_floor_height = 9.0  # 9 feet for second floor
-            
-            data['ceiling_heights'] = [f"{first_floor_height}' - 0\"", f"{second_floor_height}' - 0\""]
-            self.logger.info(f"Added default ceiling heights: {first_floor_height}' (first floor), {second_floor_height}' (second floor)")
-            
-            # Also add to data for easy access
-            data['default_ceiling_heights'] = {
-                'first_floor': first_floor_height,
-                'second_floor': second_floor_height
-            }
-            
-            # Calculate wall areas using ceiling heights and wall lengths
-            self._calculate_wall_areas(data)
+            self.logger.info("No ceiling heights found in PDF - leaving empty")
+            return
     
     def _calculate_wall_areas(self, data: Dict):
-        """Calculate wall areas using ceiling heights and wall lengths (CRITICAL for material estimates)"""
-        if not data.get('wall_lengths') or not data.get('default_ceiling_heights'):
+        """Only calculate wall areas from actual wall lengths found in PDF - NO ESTIMATES"""
+        if not data['wall_lengths']:
+            self.logger.info("No wall lengths found in PDF - leaving wall areas empty")
             return
-            
-        wall_lengths = data['wall_lengths']
-        first_floor_height = data['default_ceiling_heights']['first_floor']
-        second_floor_height = data['default_ceiling_heights']['second_floor']
         
-        # Estimate wall distribution between floors
-        # Assume 60% of walls are first floor, 40% are second floor
-        first_floor_walls = wall_lengths[:int(len(wall_lengths) * 0.6)]
-        second_floor_walls = wall_lengths[int(len(wall_lengths) * 0.6):]
-        
-        # Calculate wall areas
-        first_floor_wall_area = sum(first_floor_walls) * first_floor_height
-        second_floor_wall_area = sum(second_floor_walls) * second_floor_height
-        total_wall_area = first_floor_wall_area + second_floor_wall_area
-        
-        data['wall_areas'] = {
-            'first_floor_sqft': first_floor_wall_area,
-            'second_floor_sqft': second_floor_wall_area,
-            'total_sqft': total_wall_area
-        }
-        
-        self.logger.info(f"Calculated wall areas: {total_wall_area:.0f} sqft total ({first_floor_wall_area:.0f} first floor, {second_floor_wall_area:.0f} second floor)")
+        # Only calculate from actual wall lengths found
+        total_wall_length = sum(data['wall_lengths'])
+        if total_wall_length > 0:
+            # Use average ceiling height if available, otherwise skip
+            if data['ceiling_heights']:
+                # Extract height from first ceiling height found
+                height_str = data['ceiling_heights'][0]
+                height_ft = self._convert_to_feet(height_str)
+                if height_ft > 0:
+                    total_wall_area = total_wall_length * height_ft
+                    data['wall_areas'] = {
+                        'total_sqft': int(total_wall_area)
+                    }
+                    self.logger.info(f"Calculated wall area from actual wall lengths: {total_wall_area:.0f} sqft")
+                else:
+                    self.logger.info("Could not extract ceiling height - skipping wall area calculation")
+            else:
+                self.logger.info("No ceiling heights found - skipping wall area calculation")
     
     def _extract_structural_details(self, text: str, data: Dict):
         """Extract structural details including foundation, roof, beams, and joists"""
@@ -1319,10 +1149,7 @@ class TesseractTakeoffExtractor:
                 self.logger.info(f"Found foundation thickness: {thickness}")
                 break
         
-        # Foundation area (if not already calculated, use total sqft)
-        if not foundation['area_sqft'] and data['total_sqft']:
-            foundation['area_sqft'] = data['total_sqft']
-            foundation['details'].append(f"Foundation area: {data['total_sqft']} sqft")
+        # Only extract actual foundation area from PDF - no estimates
     
     def _extract_roof_details(self, text: str, data: Dict):
         """Extract roof type, pitch, material, and area"""
@@ -1382,19 +1209,7 @@ class TesseractTakeoffExtractor:
                 self.logger.info(f"Found roof material: {matches[0]}")
                 break
         
-        # Calculate roof area (typically 1.1-1.3x floor area for pitched roofs)
-        if data['total_sqft'] and not roof['area_sqft']:
-            # Estimate roof area based on pitch and overhangs
-            roof_multiplier = 1.2  # Default for typical residential roof
-            if roof['pitch']:
-                # Higher pitch = more roof area
-                if '12' in str(roof['pitch']) or '6' in str(roof['pitch']):
-                    roof_multiplier = 1.3
-                elif '4' in str(roof['pitch']) or '3' in str(roof['pitch']):
-                    roof_multiplier = 1.15
-            
-            roof['area_sqft'] = int(data['total_sqft'] * roof_multiplier)
-            roof['details'].append(f"Estimated roof area: {roof['area_sqft']} sqft")
+        # Only extract actual roof area from PDF - no estimates
     
     def _extract_beam_joist_details(self, text: str, data: Dict):
         """Extract beam sizes, joist specifications, and structural elements"""
@@ -1438,54 +1253,7 @@ class TesseractTakeoffExtractor:
                     joists['details'].append(f"Joist spacing: {match}")
                     self.logger.info(f"Found joist spacing: {match}")
         
-        # Estimate joist count based on floor area and spacing
-        if data['total_sqft'] and joists['spacing']:
-            try:
-                spacing = float(re.findall(r'\d+', joists['spacing'])[0])
-                # Estimate joist count: floor width / spacing
-                estimated_floor_width = (data['total_sqft'] ** 0.5) * 0.8  # Assume roughly square
-                joist_count = int(estimated_floor_width / spacing)
-                joists['count'] = joist_count
-                joists['details'].append(f"Estimated joist count: {joist_count}")
-            except (ValueError, IndexError):
-                pass
-        
-                    # Add default joist details if not found
-            if not joists['size']:
-                joists['size'] = '2x10'
-                joists['details'].append("Default joist size: 2x10")
-                self.logger.info("Added default joist size: 2x10")
-            
-            if not joists['spacing']:
-                joists['spacing'] = '16"'
-                joists['details'].append("Default joist spacing: 16\" O.C.")
-                self.logger.info("Added default joist spacing: 16\" O.C.")
-            
-            # Add default foundation thickness if not found
-            foundation = data['structural_details']['foundation']
-            if not foundation['thickness']:
-                foundation['thickness'] = '4"'
-                foundation['details'].append("Default foundation thickness: 4 inches")
-                self.logger.info("Added default foundation thickness: 4 inches")
-            
-            # Add default roof pitch if not found
-            roof = data['structural_details']['roof']
-            if not roof['pitch']:
-                roof['pitch'] = '6/12'
-                roof['details'].append("Default roof pitch: 6/12")
-                self.logger.info("Added default roof pitch: 6/12")
-        
-        # Estimate joist count with defaults
-        if data['total_sqft'] and not joists['count']:
-            try:
-                spacing = 16  # Default spacing
-                estimated_floor_width = (data['total_sqft'] ** 0.5) * 0.8
-                joist_count = int(estimated_floor_width / spacing)
-                joists['count'] = joist_count
-                joists['details'].append(f"Estimated joist count: {joist_count}")
-                self.logger.info(f"Estimated joist count: {joist_count}")
-            except (ValueError, IndexError):
-                pass
+        # Only extract actual joist count from PDF - no estimates
     
     def _extract_framing_details(self, text: str, data: Dict):
         """Extract framing specifications including stud size and spacing"""
@@ -1521,14 +1289,7 @@ class TesseractTakeoffExtractor:
                 self.logger.info(f"Found stud spacing: {matches[0]}")
                 break
         
-        # Default values if not found
-        if not framing['stud_size']:
-            framing['stud_size'] = '2x4'
-            framing['details'].append("Default stud size: 2x4")
-        
-        if not framing['stud_spacing']:
-            framing['stud_spacing'] = '16"'
-            framing['details'].append("Default stud spacing: 16\" O.C.")
+        # Only extract actual framing details from PDF - no defaults
     
     def _log_structural_summary(self, data: Dict):
         """Log a summary of extracted structural details"""
@@ -1674,20 +1435,7 @@ class TesseractTakeoffExtractor:
                 hvac['ductwork']['details'].append(f"Ductwork size: {size_str}")
                 self.logger.info(f"Found ductwork size: {size_str}")
         
-        # Estimate ductwork linear feet based on house size
-        if data['total_sqft'] and not hvac['ductwork']['linear_feet']:
-            # Typical residential: 1-2 linear feet per sqft
-            estimated_ductwork = int(data['total_sqft'] * 1.5)
-            hvac['ductwork']['linear_feet'] = estimated_ductwork
-            hvac['ductwork']['details'].append(f"Estimated ductwork: {estimated_ductwork} linear feet")
-        
-        # Add default HVAC capacity if not found
-        if not hvac['equipment']['capacity'] and data['total_sqft']:
-            # Estimate capacity based on house size (roughly 1 ton per 400-600 sqft)
-            estimated_tons = max(2, int(data['total_sqft'] / 500))  # Minimum 2 tons
-            hvac['equipment']['capacity'] = f"{estimated_tons} TON"
-            hvac['equipment']['details'].append(f"Estimated HVAC capacity: {estimated_tons} tons")
-            self.logger.info(f"Added estimated HVAC capacity: {estimated_tons} tons")
+        # Only extract actual HVAC details from PDF - no estimates
         
         # Exhaust fans
         exhaust_fan_patterns = [
@@ -1741,6 +1489,15 @@ class TesseractTakeoffExtractor:
             matches = re.findall(pattern, text, re.IGNORECASE)
             if matches:
                 capacity = matches[0]
+                # Validate water heater capacity - reject unrealistic values
+                capacity_int = int(capacity)
+                if capacity_int < 20:  # Minimum realistic capacity for any water heater
+                    self.logger.warning(f"Rejected unrealistic water heater capacity: {capacity} gallons")
+                    continue
+                elif capacity_int > 200:  # Maximum realistic capacity
+                    self.logger.warning(f"Rejected unrealistic water heater capacity: {capacity} gallons")
+                    continue
+                
                 plumbing['water_heater']['capacity'] = capacity
                 plumbing['water_heater']['details'].append(f"Water heater capacity: {capacity} gallons")
                 self.logger.info(f"Found water heater capacity: {capacity} gallons")
@@ -1762,12 +1519,7 @@ class TesseractTakeoffExtractor:
                 self.logger.info(f"Found water heater fuel: {matches[0]}")
                 break
         
-        # Add default water heater capacity if not found
-        if not plumbing['water_heater']['capacity']:
-            # Default to 50 gallons for residential
-            plumbing['water_heater']['capacity'] = '50'
-            plumbing['water_heater']['details'].append("Default water heater capacity: 50 gallons")
-            self.logger.info("Added default water heater capacity: 50 gallons")
+        # Only extract actual water heater capacity from PDF - no defaults
         
         # Pipe material patterns
         pipe_materials = [
@@ -1790,13 +1542,30 @@ class TesseractTakeoffExtractor:
                 plumbing['pipes']['details'].append(f"Pipe material: {material}")
                 self.logger.info(f"Found pipe material: {material}")
         
-        # Pipe sizes
+        # Pipe sizes with validation
         pipe_sizes = re.findall(r'(\d+(?:/\d+)?)\s*(?:INCH|IN|[\'\"])\s*(?:PIPE|DIA)', text, re.IGNORECASE)
         for size in pipe_sizes:
-            if size not in plumbing['pipes']['sizes']:
-                plumbing['pipes']['sizes'].append(size)
-                plumbing['pipes']['details'].append(f"Pipe size: {size}\"")
-                self.logger.info(f"Found pipe size: {size}\"")
+            # Validate pipe size - reject unrealistic values
+            try:
+                # Convert to decimal for validation
+                if '/' in size:
+                    parts = size.split('/')
+                    size_decimal = float(parts[0]) / float(parts[1])
+                else:
+                    size_decimal = float(size)
+                
+                # Residential pipe sizes are typically 1/2" to 4"
+                if size_decimal < 0.5 or size_decimal > 4.0:
+                    self.logger.warning(f"Rejected unrealistic pipe size: {size}\" (residential pipes are 1/2\" to 4\")")
+                    continue
+                    
+                if size not in plumbing['pipes']['sizes']:
+                    plumbing['pipes']['sizes'].append(size)
+                    plumbing['pipes']['details'].append(f"Pipe size: {size}\"")
+                    self.logger.info(f"Found pipe size: {size}\"")
+            except (ValueError, ZeroDivisionError):
+                self.logger.warning(f"Invalid pipe size format: {size}")
+                continue
         
         # Plumbing fixtures (more detailed than basic fixture count)
         fixture_patterns = [
@@ -1900,37 +1669,7 @@ class TesseractTakeoffExtractor:
                 self.logger.info(f"Found wire type: {wire_type}")
                 break
         
-        # Estimate wire linear feet based on house size
-        if data['total_sqft'] and not electrical['wire']['linear_feet']:
-            # Typical residential: 1.5-2 linear feet per sqft
-            estimated_wire = int(data['total_sqft'] * 1.5)
-            electrical['wire']['linear_feet'] = estimated_wire
-            electrical['wire']['details'].append(f"Estimated wire: {estimated_wire} linear feet")
-        
-        # Add default electrical panel if not found
-        if not electrical['main_panel']['amperage']:
-            # Default to 200 amp for modern residential
-            electrical['main_panel']['amperage'] = '200'
-            electrical['main_panel']['details'].append("Default electrical panel: 200 amp")
-            self.logger.info("Added default electrical panel: 200 amp")
-        
-        if not electrical['main_panel']['size']:
-            # Default to 40 spaces for 200 amp panel
-            electrical['main_panel']['size'] = '40'
-            electrical['main_panel']['details'].append("Default panel size: 40 spaces")
-            self.logger.info("Added default panel size: 40 spaces")
-        
-        # Add default wire gauge if not found
-        if not electrical['wire']['gauge']:
-            electrical['wire']['gauge'] = '12 AWG'
-            electrical['wire']['details'].append("Default wire gauge: 12 AWG")
-            self.logger.info("Added default wire gauge: 12 AWG")
-        
-        # Add default wire type if not found
-        if not electrical['wire']['type']:
-            electrical['wire']['type'] = 'COPPER'
-            electrical['wire']['details'].append("Default wire type: COPPER")
-            self.logger.info("Added default wire type: COPPER")
+        # Only extract actual electrical details from PDF - no defaults
         
         # Outlet types (more detailed than basic fixture count)
         outlet_patterns = [
@@ -2030,27 +1769,7 @@ class TesseractTakeoffExtractor:
                 self.logger.info(f"Found insulation type: {matches[0]}")
                 break
         
-        # Add default insulation values if not found
-        if not insulation['wall_r_value']:
-            insulation['wall_r_value'] = '13'
-            insulation['details'].append("Default wall R-value: R-13")
-            self.logger.info("Added default wall R-value: R-13")
-        
-        if not insulation['ceiling_r_value']:
-            insulation['ceiling_r_value'] = '30'
-            insulation['details'].append("Default ceiling R-value: R-30")
-            self.logger.info("Added default ceiling R-value: R-30")
-        
-        if not insulation['type']:
-            insulation['type'] = 'FIBERGLASS'
-            insulation['details'].append("Default insulation type: FIBERGLASS")
-            self.logger.info("Added default insulation type: FIBERGLASS")
-        
-        # Add default floor insulation if not found
-        if not insulation['floor_r_value']:
-            insulation['floor_r_value'] = '19'
-            insulation['details'].append("Default floor R-value: R-19")
-            self.logger.info("Added default floor R-value: R-19")
+        # Only extract actual insulation values from PDF - no defaults
     
     def _extract_siding_details(self, text: str, data: Dict):
         """Extract siding specifications"""
@@ -2076,13 +1795,7 @@ class TesseractTakeoffExtractor:
                 self.logger.info(f"Found siding type: {matches[0]}")
                 break
         
-        # Estimate siding area based on wall area
-        if data.get('wall_areas', {}).get('total_sqft') and not siding['area_sqft']:
-            # Siding typically covers exterior walls (roughly 60-70% of total wall area)
-            wall_area = data['wall_areas']['total_sqft']
-            siding_area = int(wall_area * 0.65)  # 65% of wall area
-            siding['area_sqft'] = siding_area
-            siding['details'].append(f"Estimated siding area: {siding_area} sqft")
+        # Only extract actual siding area from PDF - no estimates
     
     def _extract_flooring_details(self, text: str, data: Dict):
         """Extract flooring specifications"""
@@ -2108,17 +1821,7 @@ class TesseractTakeoffExtractor:
                     flooring['details'].append(f"Flooring type: {match}")
                     self.logger.info(f"Found flooring type: {match}")
         
-        # Estimate flooring areas by room type if not specified
-        if data['total_sqft'] and not flooring['areas']:
-            total_sqft = data['total_sqft']
-            # Rough estimates by room type
-            flooring['areas'] = {
-                'living_areas': int(total_sqft * 0.6),  # 60% living areas
-                'bedrooms': int(total_sqft * 0.25),     # 25% bedrooms
-                'bathrooms': int(total_sqft * 0.08),    # 8% bathrooms
-                'kitchen': int(total_sqft * 0.07)       # 7% kitchen
-            }
-            flooring['details'].append(f"Estimated flooring areas by room type")
+        # Only extract actual flooring areas from PDF - no estimates
     
     def _extract_interior_finish_details(self, text: str, data: Dict):
         """Extract interior finish specifications"""
@@ -2140,13 +1843,7 @@ class TesseractTakeoffExtractor:
                 self.logger.info(f"Found drywall thickness: {thickness}\"")
                 break
         
-        # Estimate drywall area based on wall area
-        if data.get('wall_areas', {}).get('total_sqft') and not finishes['drywall']['area_sqft']:
-            wall_area = data['wall_areas']['total_sqft']
-            # Drywall covers both sides of walls + ceilings
-            drywall_area = int(wall_area * 2.2)  # Both sides + some ceiling
-            finishes['drywall']['area_sqft'] = drywall_area
-            finishes['drywall']['details'].append(f"Estimated drywall area: {drywall_area} sqft")
+        # Only extract actual drywall area from PDF - no estimates
         
         # Paint specifications
         paint_patterns = [
@@ -2169,22 +1866,7 @@ class TesseractTakeoffExtractor:
                 finishes['paint']['details'].append(f"Paint type: {paint_type}")
                 self.logger.info(f"Found paint type: {paint_type}")
         
-        # Estimate paint area (same as drywall area)
-        if finishes['drywall']['area_sqft'] and not finishes['paint']['area_sqft']:
-            finishes['paint']['area_sqft'] = finishes['drywall']['area_sqft']
-            finishes['paint']['details'].append(f"Estimated paint area: {finishes['drywall']['area_sqft']} sqft")
-        
-        # Add default paint primer if not found
-        if not finishes['paint']['primer']:
-            finishes['paint']['primer'] = 'PVA PRIMER'
-            finishes['paint']['details'].append("Default paint primer: PVA PRIMER")
-            self.logger.info("Added default paint primer: PVA PRIMER")
-        
-        # Add default paint finish if not found
-        if not finishes['paint']['finish']:
-            finishes['paint']['finish'] = 'EGG SHELL'
-            finishes['paint']['details'].append("Default paint finish: EGG SHELL")
-            self.logger.info("Added default paint finish: EGG SHELL")
+        # Only extract actual paint area from PDF - no estimates
         
         # Trim specifications
         trim_patterns = [
@@ -2206,28 +1888,7 @@ class TesseractTakeoffExtractor:
                 finishes['trim']['details'].append(f"Trim size: {size}\"")
                 self.logger.info(f"Found trim size: {size}\"")
         
-        # Estimate trim based on house size if not found
-        if data['total_sqft'] and not finishes['trim']['baseboard']:
-            # Estimate baseboard based on house perimeter
-            estimated_perimeter = (data['total_sqft'] ** 0.5) * 4
-            estimated_baseboard = int(estimated_perimeter * 0.8)  # 80% of perimeter
-            finishes['trim']['baseboard'] = estimated_baseboard
-            finishes['trim']['details'].append(f"Estimated baseboard: {estimated_baseboard} linear feet")
-            self.logger.info(f"Added estimated baseboard: {estimated_baseboard} linear feet")
-        
-        if data['total_sqft'] and not finishes['trim']['crown_molding']:
-            # Estimate crown molding for main living areas
-            estimated_crown = int(data['total_sqft'] * 0.3)  # 30% of total sqft
-            finishes['trim']['crown_molding'] = estimated_crown
-            finishes['trim']['details'].append(f"Estimated crown molding: {estimated_crown} linear feet")
-            self.logger.info(f"Added estimated crown molding: {estimated_crown} linear feet")
-        
-        if data['total_sqft'] and not finishes['trim']['casing']:
-            # Estimate casing for doors and windows
-            estimated_casing = int(data['total_sqft'] * 0.2)  # 20% of total sqft
-            finishes['trim']['casing'] = estimated_casing
-            finishes['trim']['details'].append(f"Estimated casing: {estimated_casing} linear feet")
-            self.logger.info(f"Added estimated casing: {estimated_casing} linear feet")
+        # Only extract actual trim measurements from PDF - no estimates
     
     def _log_system_summary(self, data: Dict):
         """Log a summary of extracted system details"""
