@@ -18,77 +18,114 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class TakeoffConfig:
     """Configuration class for takeoff estimator"""
     
-    # Material + Labor costs (per unit) - Realistic mid-grade with installation
+    # Material costs only (no labor)
     DEFAULT_COSTS = {
-        'concrete': 130,  # per cubic yard (material + placement)
-        'lumber': 1.0,  # per board foot (material + basic framing)
-        'roofing_shingles': 3.5,  # per sqft (material + installation)
-        'roofing_underlayment': 1.0,  # per sqft (material + installation)
-        'roofing_flashing': 8.0,  # per linear foot (material + installation)
-        'insulation': 2.0,  # per sqft (material + installation)
-        'drywall': 2.5,  # per sqft (material + hanging + finishing)
-        'tile': 8.0,  # per sqft (material + installation)
-        'carpet': 5.0,  # per sqft (material + installation)
-        'hardwood': 10.0,  # per sqft (material + installation)
-        'door': 450,  # per door (material + installation)
-        'window': 650,  # per window (material + installation)
-        'door_frame': 50,  # per frame (material only)
-        'window_frame': 75,  # per frame (material only)
-        'paint_primer': 35,  # per gallon
-        'paint': 45,  # per gallon
-        'paint_labor': 1.5,  # per sqft (labor for painting)
-        'baseboard': 6.0,  # per linear foot (material + installation)
-        'crown_molding': 8.0,  # per linear foot (material + installation)
-        'door_casing': 5.0,  # per linear foot (material + installation)
-        'window_casing': 5.5,  # per linear foot (material + installation)
-        'outlet': 45,  # per outlet (material + installation)
-        'light_fixture': 150,  # per fixture (material + installation)
-        'switch': 35,  # per switch (material + installation)
-        'wire': 1.2,  # per foot (material + installation)
-        'electrical_panel': 2000,  # main electrical panel (installed)
-        'service_entrance': 1500,  # electrical service entrance (installed)
-        'plumbing_fixture': 400,  # per fixture (material + installation)
-        'pipe': 8.0,  # per foot (material + installation)
-        'fitting': 15.0,  # per fitting (material + installation)
-        'water_main_connection': 1500,  # water line connection
-        'sewer_connection': 2000,  # sewer line connection
-        'ductwork': 12.0,  # per linear foot (material + installation)
-        'vent': 65,  # per vent (material + installation)
-        'thermostat': 300,  # per thermostat (material + installation)
-        'air_handler': 4500,  # per unit (material + installation)
-        'hvac_installation': 1500,  # HVAC system setup
-        'excavation': 8.0,  # per cubic yard
-        'grading': 2.0,  # per sqft
-        'backfill': 6.0,  # per cubic yard
-        'site_preparation': 5000,  # lump sum
-        'nails': 2.0,  # per lb
-        'screws': 3.0,  # per lb
-        'bolts': 1.0,  # per bolt
-        'hinges': 5.0,  # per hinge
-        'locks': 25,  # per lock
-        'kitchen_cabinet': 200,  # per linear foot
-        'bathroom_cabinet': 300,  # per cabinet
-        'countertop': 50,  # per sqft
-        'sink': 150,  # per sink
-        'siding': 8.0,  # per sqft
-        'gutter': 10.0,  # per linear foot
-        'downspout': 50,  # per downspout
-        'exterior_paint': 40,  # per gallon
-        'refrigerator': 1200,
-        'stove': 800,
-        'dishwasher': 600,
-        'washer': 700,
-        'dryer': 700,
-        'water_heater': 800,
-        'building_permit': 2000,  # per permit
-        'electrical_permit': 200,  # per permit
-        'plumbing_permit': 200,  # per permit
-        'hvac_permit': 200,  # per permit
-        'inspection_fee': 150,  # per inspection
-        'sod': 2.0,  # per sqft
-        'mulch': 30,  # per cubic yard
-        'plant': 25,  # per plant
-        'irrigation_system': 2000  # per system
+        'concrete': 85,  # per cubic yard (material only)
+        'lumber': 0.65,  # per board foot (material only)
+        'roofing_shingles': 1.8,  # per sqft (material only)
+        'roofing_underlayment': 0.45,  # per sqft (material only)
+        'roofing_flashing': 3.5,  # per linear foot (material only)
+        'insulation': 1.2,  # per sqft (material only)
+        'drywall': 0.85,  # per sqft (material only)
+        'tile': 4.5,  # per sqft (material only)
+        'carpet': 2.8,  # per sqft (material only)
+        'hardwood': 6.5,  # per sqft (material only)
+        'door': 180,  # per door (material only)
+        'window': 320,  # per window (material only)
+        'door_frame': 35,  # per frame (material only)
+        'window_frame': 45,  # per frame (material only)
+        'paint_primer': 35,  # per gallon (material only)
+        'paint': 45,  # per gallon (material only)
+        'baseboard': 2.5,  # per linear foot (material only)
+        'crown_molding': 4.0,  # per linear foot (material only)
+        'door_casing': 2.2,  # per linear foot (material only)
+        'window_casing': 2.8,  # per linear foot (material only)
+        'outlet': 12,  # per outlet (material only)
+        'light_fixture': 85,  # per fixture (material only)
+        'switch': 8,  # per switch (material only)
+        'wire': 0.65,  # per foot (material only)
+        'electrical_panel': 850,  # main electrical panel (material only)
+        'service_entrance': 650,  # electrical service entrance (material only)
+        'plumbing_fixture': 220,  # per fixture (material only)
+        'pipe': 3.2,  # per foot (material only)
+        'fitting': 8.5,  # per fitting (material only)
+        'water_main_connection': 450,  # water line connection (material only)
+        'sewer_connection': 680,  # sewer line connection (material only)
+        'ductwork': 5.5,  # per linear foot (material only)
+        'vent': 28,  # per vent (material only)
+        'thermostat': 120,  # per thermostat (material only)
+        'air_handler': 2800,  # per unit (material only)
+        'hvac_installation': 0,  # No installation costs
+        'excavation': 0,  # No material cost for excavation
+        'grading': 0,  # No material cost for grading
+        'backfill': 0,  # No material cost for backfill
+        'site_preparation': 0,  # No material cost for site prep
+        'nails': 2.0,  # per lb (material only)
+        'screws': 3.0,  # per lb (material only)
+        'bolts': 1.0,  # per bolt (material only)
+        'hinges': 3.5,  # per hinge (material only)
+        'locks': 18,  # per lock (material only)
+        'kitchen_cabinet': 120,  # per linear foot (material only)
+        'bathroom_cabinet': 180,  # per cabinet (material only)
+        'countertop': 28,  # per sqft (material only)
+        'sink': 95,  # per sink (material only)
+        'siding': 4.2,  # per sqft (material only)
+        'gutter': 4.5,  # per linear foot (material only)
+        'downspout': 22,  # per downspout (material only)
+        'exterior_paint': 40,  # per gallon (material only)
+        'refrigerator': 1200,  # appliance cost
+        'stove': 800,  # appliance cost
+        'dishwasher': 600,  # appliance cost
+        'washer': 700,  # appliance cost
+        'dryer': 700,  # appliance cost
+        'water_heater': 800,  # appliance cost
+        'sod': 0.85,  # per sqft (material only)
+        'mulch': 25,  # per cubic yard (material only)
+        'plant': 18,  # per plant (material only)
+        'irrigation_system': 1200,  # per system (material only)
+        # Foundation materials
+        'rebar': 800,  # per ton (material only)
+        'foundation_bolt': 8,  # per bolt (material only)
+        'vapor_barrier': 0.45,  # per sqft (material only)
+        'waterproofing': 1.2,  # per sqft (material only)
+        'gravel': 35,  # per cubic yard (material only)
+        'form_boards': 0.85,  # per board foot (material only)
+        # Structural materials
+        'engineered_lumber': 4.5,  # per linear foot (material only)
+        'metal_connector': 12,  # per connector (material only)
+        'structural_screws': 4.5,  # per lb (material only)
+        'hurricane_tie': 8,  # per tie (material only)
+        'post_anchor': 15,  # per anchor (material only)
+        'beam_pocket': 25,  # per pocket (material only)
+        # Additional electrical
+        'conduit': 2.8,  # per foot (material only)
+        'junction_box': 8,  # per box (material only)
+        'breaker': 25,  # per breaker (material only)
+        'gfci_outlet': 18,  # per GFCI outlet (material only)
+        'smoke_detector': 35,  # per detector (material only)
+        'electrical_meter': 180,  # per meter (material only)
+        'grounding_rod': 25,  # per rod (material only)
+        'wire_nut': 0.15,  # per nut (material only)
+        # Additional plumbing
+        'shut_off_valve': 18,  # per valve (material only)
+        'vent_pipe': 3.5,  # per linear foot (material only)
+        'cleanout': 45,  # per cleanout (material only)
+        'water_meter': 220,  # per meter (material only)
+        'pressure_tank': 350,  # per tank (material only)
+        'sump_pump': 280,  # per pump (material only)
+        'floor_drain': 65,  # per drain (material only)
+        'pipe_insulation': 1.8,  # per linear foot (material only)
+        # Additional insulation
+        'house_wrap': 0.65,  # per sqft (material only)
+        'foam_board': 1.85,  # per sqft (material only)
+        'caulk_tube': 4.5,  # per tube (material only)
+        'weatherstripping': 2.2,  # per linear foot (material only)
+        # Additional flooring
+        'subfloor': 2.8,  # per sqft (material only)
+        'underlayment': 1.2,  # per sqft (material only)
+        'transition_strip': 8,  # per linear foot (material only)
+        'floor_adhesive': 45,  # per gallon (material only)
+        'carpet_padding': 1.8  # per sqft (material only)
     }
     
     # Calculation factors
@@ -130,7 +167,9 @@ class HousePlanTakeoff:
             'fixtures': {
                 'electrical_outlets': 0,
                 'light_fixtures': 0,
-                'plumbing_fixtures': 0
+                'plumbing_fixtures': 0,
+                'switches': 0,
+                'hvac_vents': 0
             }
         }
         
@@ -253,7 +292,7 @@ class HousePlanTakeoff:
                 
                 # Extract room names and areas - be more selective and avoid duplicates
                 # Look for common room names followed by numbers, but be more specific
-                room_keywords = ['DINING', 'KITCHEN', 'BEDROOM', 'BATH', 'GARAGE', 'PATIO', 'PORCH', 'OFFICE', 'STUDY', 'FAMILY', 'DEN', 'MASTER', 'CLOSET', 'LAUNDRY', 'POWDER', 'HALF', 'BREAKFAST', 'GREAT', 'LOFT', 'BONUS']
+                room_keywords = ['LIVING', 'DINING', 'KITCHEN', 'BEDROOM', 'BATH', 'GARAGE', 'PATIO', 'PORCH', 'OFFICE', 'STUDY', 'FAMILY', 'DEN', 'MASTER', 'CLOSET', 'LAUNDRY', 'POWDER', 'HALF', 'BREAKFAST', 'GREAT', 'LOFT', 'BONUS', 'FOYER', 'ENTRY', 'HALL', 'UTILITY', 'PANTRY', 'MUDROOM', 'SUNROOM', 'LIBRARY', 'MEDIA', 'GAME', 'RECREATION', 'EXERCISE', 'WORKSHOP']
                 
                 # Use the found_areas set from outside the loop
                 
@@ -328,20 +367,36 @@ class HousePlanTakeoff:
                                 'area': area_val
                             }
                 
-                # Count fixtures more accurately
-                # Electrical outlets - look for specific outlet symbols/callouts
+                # Count fixtures more accurately with CONSERVATIVE patterns
+                # Electrical outlets - only count explicit outlet references, avoid voltage/dimension matches
                 outlet_patterns = re.findall(r'(?:OUTLET|outlet|RECEP|recep|\bGFI\b|\bGFCI\b)', text)
-                dimensions['fixtures']['electrical_outlets'] += len(outlet_patterns)
+                # Only count specific electrical callouts, not generic alphanumeric codes
+                electrical_symbols = re.findall(r'(?:\bOUTLET\s+\d+\b|\bRECEP\s+\d+\b)', text)
+                dimensions['fixtures']['electrical_outlets'] += len(outlet_patterns) + len(electrical_symbols)
                 
-                # Light fixtures - be more specific to avoid false matches
-                light_patterns = re.findall(r'(?:LIGHT\s+FIXTURE|light\s+fixture|CEILING\s+FAN|ceiling\s+fan|PENDANT|pendant|CHANDELIER|chandelier)', text)
-                dimensions['fixtures']['light_fixtures'] += len(light_patterns)
+                # Light fixtures - be more conservative, avoid generic symbols
+                light_patterns = re.findall(r'(?:LIGHT\s+FIXTURE|light\s+fixture|CEILING\s+FAN|ceiling\s+fan|PENDANT|pendant|CHANDELIER|chandelier|LIGHT\s+\d+)', text)
+                # Only count specific lighting callouts
+                lighting_symbols = re.findall(r'(?:\bLT\d+\b|\bLIGHT\s+\d+\b)', text)
+                dimensions['fixtures']['light_fixtures'] += len(light_patterns) + len(lighting_symbols)
                 
-                # Plumbing fixtures - count specific fixtures
-                toilet_patterns = len(re.findall(r'(?:TOILET|toilet|WC|w\.c\.)', text))
-                sink_patterns = len(re.findall(r'(?:SINK|sink|LAVATORY|lavatory|LAV|lav)', text))
-                shower_patterns = len(re.findall(r'(?:SHOWER|shower|TUB|tub|BATHTUB|bathtub)', text))
-                dimensions['fixtures']['plumbing_fixtures'] += toilet_patterns + sink_patterns + shower_patterns
+                # Plumbing fixtures - be more conservative, avoid generic codes
+                toilet_patterns = len(re.findall(r'(?:TOILET|toilet|WC|w\.c\.|WATER\s+CLOSET)', text))
+                sink_patterns = len(re.findall(r'(?:SINK|sink|LAVATORY|lavatory|LAV|lav|BASIN)', text))
+                shower_patterns = len(re.findall(r'(?:SHOWER|shower|TUB|tub|BATHTUB|bathtub|BATH\s+TUB)', text))
+                # Only count specific plumbing callouts, not generic codes
+                plumbing_symbols = len(re.findall(r'(?:\bPLUMBING\s+\d+\b|\bFIXTURE\s+\d+\b)', text))
+                dimensions['fixtures']['plumbing_fixtures'] += toilet_patterns + sink_patterns + shower_patterns + plumbing_symbols
+                
+                # Count switches - be more conservative
+                switch_patterns = re.findall(r'(?:SWITCH|switch|TOGGLE|toggle)', text)
+                switch_symbols = re.findall(r'(?:\bSW\d+\b|\bSWITCH\s+\d+\b)', text)
+                dimensions['fixtures']['switches'] += len(switch_patterns) + len(switch_symbols)
+                
+                # Count HVAC vents - be more conservative
+                vent_patterns = re.findall(r'(?:SUPPLY\s+VENT|RETURN\s+VENT|AIR\s+VENT|HVAC\s+VENT)', text)
+                vent_symbols = re.findall(r'(?:\bVENT\s+\d+\b|\bHVAC\s+\d+\b)', text)
+                dimensions['fixtures']['hvac_vents'] += len(vent_patterns) + len(vent_symbols)
         
         # Remove duplicate wall lengths
         dimensions['wall_lengths'] = list(set(dimensions['wall_lengths']))
@@ -457,6 +512,13 @@ class HousePlanTakeoff:
         # Calculate perimeter early for use in multiple calculations
         perimeter = (total_sqft ** 0.5) * 4  # Approximate perimeter
         
+        # Calculate total rooms early for use in multiple calculations
+        total_rooms = sum(len(room_data) if isinstance(room_data, list) else 1 
+                         for room_data in dims.get('room_details', {}).values())
+        
+        # Calculate bathroom count early for use in multiple calculations
+        bathroom_count = len(dims['room_details'].get('bathroom', [])) if isinstance(dims['room_details'].get('bathroom'), list) else (1 if 'bathroom' in dims['room_details'] else 3)
+        
         # Site work and foundation (NEW CATEGORY)
         estimates['site_work'] = {
             'excavation_cubic_yards': total_sqft * 0.2 / 27,  # 20% of area, 1 ft deep
@@ -477,10 +539,31 @@ class HousePlanTakeoff:
             'total_cubic_yards': (total_sqft * 0.2 + driveway_sqft + sidewalk_sqft) / 27  # Convert to cubic yards
         }
         
+        # Foundation materials (NEW CATEGORY)
+        foundation_perimeter = perimeter * 0.8  # 80% of house perimeter for foundation walls
+        estimates['foundation'] = {
+            'rebar_tons': total_sqft * 0.002,  # 0.002 tons per sqft
+            'foundation_bolts_count': int(foundation_perimeter / 6),  # 1 bolt per 6 feet
+            'vapor_barrier_sqft': total_sqft * 1.1,  # 110% of house area
+            'waterproofing_sqft': foundation_perimeter * 8,  # 8 ft high foundation walls
+            'gravel_cubic_yards': total_sqft * 0.05 / 27,  # Base gravel
+            'form_boards_bf': foundation_perimeter * 16  # 2x8 forms, both sides
+        }
+        
         estimates['lumber'] = {
             'framing': total_sqft * 1.5,  # 1.5 board feet per sqft
             'sheathing': total_sqft * 1.1,  # 1.1 sheets per sqft
             'total_board_feet': total_sqft * 1.5
+        }
+        
+        # Structural materials (NEW CATEGORY)
+        estimates['structural'] = {
+            'engineered_lumber_lf': total_sqft * 0.3,  # LVL beams, headers
+            'metal_connectors_count': int(total_sqft / 50),  # 1 per 50 sqft (joist hangers, etc.)
+            'structural_screws_lbs': total_sqft * 0.02,  # Structural fasteners
+            'hurricane_ties_count': int(total_sqft / 100),  # 1 per 100 sqft
+            'post_anchors_count': int(perimeter / 20),  # 1 per 20 feet of perimeter
+            'beam_pockets_count': int(total_sqft / 400)  # Beam pocket inserts
         }
         
         estimates['roofing'] = {
@@ -499,7 +582,12 @@ class HousePlanTakeoff:
         estimates['insulation'] = {
             'wall_sqft': wall_area,
             'ceiling_sqft': total_sqft,
-            'total_sqft': wall_area + total_sqft
+            'total_sqft': wall_area + total_sqft,
+            # Additional insulation materials
+            'house_wrap_sqft': wall_area * 1.1,  # 110% for overlap
+            'foam_board_sqft': wall_area * 0.3,  # 30% foam board supplement
+            'caulk_tubes': int(perimeter / 10),  # 1 tube per 10 feet
+            'weatherstripping_lf': dims['door_count'] * 20 + dims['window_count'] * 15  # Doors + windows
         }
         
         estimates['drywall'] = {
@@ -512,7 +600,13 @@ class HousePlanTakeoff:
             'total_sqft': total_sqft,
             'tile_sqft': total_sqft * 0.3,  # 30% tile areas
             'carpet_sqft': total_sqft * 0.4,  # 40% carpet
-            'hardwood_sqft': total_sqft * 0.3  # 30% hardwood
+            'hardwood_sqft': total_sqft * 0.3,  # 30% hardwood
+            # Installation materials
+            'subfloor_sqft': total_sqft,  # Plywood/OSB subflooring
+            'underlayment_sqft': total_sqft * 0.7,  # 70% needs underlayment
+            'transition_strips_lf': int(total_rooms * 8),  # Room transitions
+            'floor_adhesive_gallons': int(total_sqft * 0.3 / 200),  # For tile areas
+            'carpet_padding_sqft': total_sqft * 0.4  # Under carpet
         }
         
         estimates['doors_windows'] = {
@@ -537,49 +631,89 @@ class HousePlanTakeoff:
             'window_casing_linear_ft': dims['window_count'] * 12  # 12ft per window
         }
         
-        # Calculate realistic electrical needs based on rooms and house size
-        total_rooms = sum(len(room_data) if isinstance(room_data, list) else 1 
-                         for room_data in dims.get('room_details', {}).values())
+        # Use extracted electrical data with realistic bounds
+        # Apply sanity checks - outlets should be 1 per 100-150 sqft for residential
+        max_realistic_outlets = int(total_sqft / 100)  # 1 per 100 sqft max
+        min_realistic_outlets = int(total_sqft / 200)  # 1 per 200 sqft min
         
-        # Estimate outlets: 2 per bedroom, 4 per kitchen, 2 per bathroom, 1 per other room, plus extras
-        estimated_outlets = max(dims['fixtures']['electrical_outlets'], 
-                               total_rooms * 2 + 8)  # Base + extras for kitchen/high-use areas
+        extracted_outlets = dims['fixtures']['electrical_outlets']
+        if extracted_outlets > max_realistic_outlets or extracted_outlets < min_realistic_outlets:
+            # Use estimate if extracted data is unrealistic
+            realistic_outlets = int(total_sqft / 150)  # 1 per 150 sqft (realistic)
+            self.logger.warning(f"Extracted outlets ({extracted_outlets}) seems unrealistic, using estimate ({realistic_outlets})")
+        else:
+            realistic_outlets = extracted_outlets
         
-        # Estimate light fixtures: 1-2 per room plus outdoor/hallway lights
-        estimated_lights = max(dims['fixtures']['light_fixtures'], 
-                              total_rooms + 4)  # 1 per room + outdoor/hallway
+        # Light fixtures - use extracted or estimate based on rooms
+        extracted_lights = dims['fixtures']['light_fixtures']
+        min_lights = total_rooms  # At least 1 per room
+        realistic_lights = max(extracted_lights, min_lights)
         
         estimates['electrical'] = {
-            'outlets': estimated_outlets,
-            'light_fixtures': estimated_lights,
-            'switches': dims['door_count'] * 1.5,  # 1.5 switches per door
-            'wire_feet': total_sqft * 0.8,  # More realistic wire estimate
-            'electrical_panel': 1,  # Main electrical panel
-            'service_entrance': 1   # Service entrance and meter
+            'outlets': realistic_outlets,
+            'light_fixtures': realistic_lights,
+            'switches': max(dims['fixtures']['switches'], realistic_lights),  # At least 1 switch per light
+            'wire_feet': realistic_outlets * 40 + realistic_lights * 25,  # More realistic wire estimate
+            'electrical_panel': 1,
+            'service_entrance': 1,
+            # Additional electrical infrastructure
+            'conduit_feet': realistic_outlets * 15 + realistic_lights * 10,  # Conduit runs
+            'junction_boxes_count': int((realistic_outlets + realistic_lights) / 3),  # 1 per 3 devices
+            'breakers_count': int(total_sqft / 200),  # 1 breaker per 200 sqft
+            'gfci_outlets_count': bathroom_count + 1,  # Bathrooms + kitchen
+            'smoke_detectors_count': total_rooms,  # 1 per room minimum
+            'electrical_meter': 1,
+            'grounding_rods_count': 2,  # Standard requirement
+            'wire_nuts_count': realistic_outlets * 4  # Wire connections
         }
         
-        # Calculate realistic plumbing fixtures based on bathrooms and kitchen
-        bathroom_count = len(dims['room_details'].get('bathroom', [])) if isinstance(dims['room_details'].get('bathroom'), list) else (1 if 'bathroom' in dims['room_details'] else 3)
-        kitchen_count = 1 if 'kitchen' in dims['room_details'] else 1
+        # Use extracted plumbing data with realistic bounds
+        # Sanity check - should be ~3 fixtures per bathroom + 1-2 kitchen + laundry
+        expected_fixtures = bathroom_count * 3 + 2  # 3 per bathroom + kitchen sink + laundry
         
-        # Estimate: 3 fixtures per bathroom (toilet, sink, shower/tub) + 1-2 kitchen sinks + laundry
-        estimated_plumbing_fixtures = max(dims['fixtures']['plumbing_fixtures'], 
-                                        bathroom_count * 3 + kitchen_count + 1)  # +1 for laundry
+        extracted_plumbing = dims['fixtures']['plumbing_fixtures']
+        if extracted_plumbing > expected_fixtures * 2 or extracted_plumbing < expected_fixtures * 0.5:
+            # Use estimate if extracted data is unrealistic
+            realistic_plumbing = expected_fixtures
+            self.logger.warning(f"Extracted plumbing fixtures ({extracted_plumbing}) seems unrealistic, using estimate ({realistic_plumbing})")
+        else:
+            realistic_plumbing = extracted_plumbing
         
         estimates['plumbing'] = {
-            'fixtures': estimated_plumbing_fixtures,
-            'pipe_feet': total_sqft * 0.4,  # More realistic pipe estimate
-            'fittings': estimated_plumbing_fixtures * 4,  # 4 fittings per fixture
-            'water_main_connection': 1,  # Water line connection
-            'sewer_connection': 1        # Sewer line connection
+            'fixtures': realistic_plumbing,
+            'pipe_feet': realistic_plumbing * 60,  # More realistic pipe estimate (60 ft per fixture)
+            'fittings': realistic_plumbing * 4,
+            'water_main_connection': 1,
+            'sewer_connection': 1,
+            # Additional plumbing infrastructure
+            'shut_off_valves_count': realistic_plumbing + 2,  # 1 per fixture + main + water heater
+            'vent_pipes_lf': realistic_plumbing * 15,  # Vent stack runs
+            'cleanouts_count': bathroom_count + 2,  # 1 per bathroom + kitchen + main
+            'water_meter': 1,
+            'pressure_tank': 1 if total_sqft > 2000 else 0,  # For larger homes
+            'sump_pump': 1 if 'basement' in str(dims.get('room_details', {})).lower() else 0,
+            'floor_drains_count': 1 if 'basement' in str(dims.get('room_details', {})).lower() else 0,
+            'pipe_insulation_lf': realistic_plumbing * 20  # Insulate hot water lines
         }
         
-        # Add HVAC materials
+        # Calculate HVAC based on actual rooms and extracted data
+        
+        # Use extracted HVAC data with realistic fallback
+        extracted_vents = dims['fixtures']['hvac_vents']
+        expected_vents = total_rooms * 2  # 2 vents per room (supply + return)
+        
+        if extracted_vents > 0 and extracted_vents < expected_vents * 3:  # If reasonable extracted data
+            realistic_vents = extracted_vents
+        else:
+            realistic_vents = expected_vents
+            if extracted_vents > 0:
+                self.logger.warning(f"Extracted HVAC vents ({extracted_vents}) seems unrealistic, using estimate ({realistic_vents})")
+        
         estimates['hvac'] = {
-            'ductwork_linear_ft': total_sqft * 0.3,  # 0.3 feet per sqft
-            'vents': total_sqft / 100,  # 1 vent per 100 sqft
-            'thermostat': 1,
-            'air_handler': 1 if total_sqft > 1500 else 0,
+            'ductwork_linear_ft': total_rooms * 25 + perimeter * 0.5,  # Based on rooms + perimeter runs
+            'vents': realistic_vents,
+            'thermostat': max(1, int(total_sqft / 2000)),  # 1 per 2000 sqft
+            'air_handler': max(1, int(total_sqft / 2500)),  # 1 per 2500 sqft
             'hvac_installation': 1  # Installation and setup
         }
         
@@ -664,7 +798,7 @@ class HousePlanTakeoff:
         cost_estimate = {}
         total_cost = 0
         
-        # Site work costs (NEW)
+        # Site work costs (material only - most site work is labor, so minimal cost)
         site_work_cost = (
             self.material_estimates['site_work']['excavation_cubic_yards'] * default_costs['excavation'] +
             self.material_estimates['site_work']['grading_sqft'] * default_costs['grading'] +
@@ -674,17 +808,41 @@ class HousePlanTakeoff:
         cost_estimate['site_work'] = site_work_cost
         total_cost += site_work_cost
         
-        # Concrete costs
+        # Concrete costs (material only)
         concrete_cost = self.material_estimates['concrete']['total_cubic_yards'] * default_costs['concrete']
         cost_estimate['concrete'] = concrete_cost
         total_cost += concrete_cost
         
-        # Lumber costs
+        # Foundation costs (material only)
+        foundation_cost = (
+            self.material_estimates['foundation']['rebar_tons'] * default_costs['rebar'] +
+            self.material_estimates['foundation']['foundation_bolts_count'] * default_costs['foundation_bolt'] +
+            self.material_estimates['foundation']['vapor_barrier_sqft'] * default_costs['vapor_barrier'] +
+            self.material_estimates['foundation']['waterproofing_sqft'] * default_costs['waterproofing'] +
+            self.material_estimates['foundation']['gravel_cubic_yards'] * default_costs['gravel'] +
+            self.material_estimates['foundation']['form_boards_bf'] * default_costs['form_boards']
+        )
+        cost_estimate['foundation'] = foundation_cost
+        total_cost += foundation_cost
+        
+        # Lumber costs (material only)
         lumber_cost = self.material_estimates['lumber']['total_board_feet'] * default_costs['lumber']
         cost_estimate['lumber'] = lumber_cost
         total_cost += lumber_cost
         
-        # Roofing costs (includes material + installation)
+        # Structural costs (material only)
+        structural_cost = (
+            self.material_estimates['structural']['engineered_lumber_lf'] * default_costs['engineered_lumber'] +
+            self.material_estimates['structural']['metal_connectors_count'] * default_costs['metal_connector'] +
+            self.material_estimates['structural']['structural_screws_lbs'] * default_costs['structural_screws'] +
+            self.material_estimates['structural']['hurricane_ties_count'] * default_costs['hurricane_tie'] +
+            self.material_estimates['structural']['post_anchors_count'] * default_costs['post_anchor'] +
+            self.material_estimates['structural']['beam_pockets_count'] * default_costs['beam_pocket']
+        )
+        cost_estimate['structural'] = structural_cost
+        total_cost += structural_cost
+        
+        # Roofing costs (material only)
         roofing_cost = (
             self.material_estimates['roofing']['shingles_sqft'] * default_costs['roofing_shingles'] +
             self.material_estimates['roofing']['underlayment_sqft'] * default_costs['roofing_underlayment'] +
@@ -693,27 +851,38 @@ class HousePlanTakeoff:
         cost_estimate['roofing'] = roofing_cost
         total_cost += roofing_cost
         
-        # Insulation costs (includes material + installation)
-        insulation_cost = self.material_estimates['insulation']['total_sqft'] * default_costs['insulation']
+        # Insulation costs (material only)
+        insulation_cost = (
+            self.material_estimates['insulation']['total_sqft'] * default_costs['insulation'] +
+            self.material_estimates['insulation']['house_wrap_sqft'] * default_costs['house_wrap'] +
+            self.material_estimates['insulation']['foam_board_sqft'] * default_costs['foam_board'] +
+            self.material_estimates['insulation']['caulk_tubes'] * default_costs['caulk_tube'] +
+            self.material_estimates['insulation']['weatherstripping_lf'] * default_costs['weatherstripping']
+        )
         cost_estimate['insulation'] = insulation_cost
         total_cost += insulation_cost
         
-        # Drywall costs (per sqft, includes material + installation)
+        # Drywall costs (material only)
         drywall_sqft = self.material_estimates['drywall']['wall_sqft'] + self.material_estimates['drywall']['ceiling_sqft']
         drywall_cost = drywall_sqft * default_costs['drywall']
         cost_estimate['drywall'] = drywall_cost
         total_cost += drywall_cost
         
-        # Flooring costs (includes material + installation)
+        # Flooring costs (material only)
         flooring_cost = (
             self.material_estimates['flooring']['tile_sqft'] * default_costs['tile'] +
             self.material_estimates['flooring']['carpet_sqft'] * default_costs['carpet'] +
-            self.material_estimates['flooring']['hardwood_sqft'] * default_costs['hardwood']
+            self.material_estimates['flooring']['hardwood_sqft'] * default_costs['hardwood'] +
+            self.material_estimates['flooring']['subfloor_sqft'] * default_costs['subfloor'] +
+            self.material_estimates['flooring']['underlayment_sqft'] * default_costs['underlayment'] +
+            self.material_estimates['flooring']['transition_strips_lf'] * default_costs['transition_strip'] +
+            self.material_estimates['flooring']['floor_adhesive_gallons'] * default_costs['floor_adhesive'] +
+            self.material_estimates['flooring']['carpet_padding_sqft'] * default_costs['carpet_padding']
         )
         cost_estimate['flooring'] = flooring_cost
         total_cost += flooring_cost
         
-        # Doors and windows costs (includes material + installation)
+        # Doors and windows costs (material only)
         doors_windows_cost = (
             self.material_estimates['doors_windows']['doors'] * default_costs['door'] +
             self.material_estimates['doors_windows']['windows'] * default_costs['window'] +
@@ -723,18 +892,15 @@ class HousePlanTakeoff:
         cost_estimate['doors_windows'] = doors_windows_cost
         total_cost += doors_windows_cost
         
-        # Paint costs (material + labor)
-        paint_sqft = self.material_estimates['paint']['wall_sqft'] + self.material_estimates['paint']['ceiling_sqft']
-        paint_material_cost = (
+        # Paint costs (material only)
+        paint_cost = (
             self.material_estimates['paint']['primer_gallons'] * default_costs['paint_primer'] +
             self.material_estimates['paint']['paint_gallons'] * default_costs['paint']
         )
-        paint_labor_cost = paint_sqft * default_costs['paint_labor']
-        paint_cost = paint_material_cost + paint_labor_cost
         cost_estimate['paint'] = paint_cost
         total_cost += paint_cost
         
-        # Trim and molding costs (includes material + installation)
+        # Trim and molding costs (material only)
         trim_cost = (
             self.material_estimates['trim_molding']['baseboard_linear_ft'] * default_costs['baseboard'] +
             self.material_estimates['trim_molding']['crown_molding_linear_ft'] * default_costs['crown_molding'] +
@@ -744,30 +910,46 @@ class HousePlanTakeoff:
         cost_estimate['trim_molding'] = trim_cost
         total_cost += trim_cost
         
-        # Electrical costs (includes material + installation)
+        # Electrical costs (material only)
         electrical_cost = (
             self.material_estimates['electrical']['outlets'] * default_costs['outlet'] +
             self.material_estimates['electrical']['light_fixtures'] * default_costs['light_fixture'] +
             self.material_estimates['electrical']['switches'] * default_costs['switch'] +
             self.material_estimates['electrical']['wire_feet'] * default_costs['wire'] +
             self.material_estimates['electrical']['electrical_panel'] * default_costs['electrical_panel'] +
-            self.material_estimates['electrical']['service_entrance'] * default_costs['service_entrance']
+            self.material_estimates['electrical']['service_entrance'] * default_costs['service_entrance'] +
+            self.material_estimates['electrical']['conduit_feet'] * default_costs['conduit'] +
+            self.material_estimates['electrical']['junction_boxes_count'] * default_costs['junction_box'] +
+            self.material_estimates['electrical']['breakers_count'] * default_costs['breaker'] +
+            self.material_estimates['electrical']['gfci_outlets_count'] * default_costs['gfci_outlet'] +
+            self.material_estimates['electrical']['smoke_detectors_count'] * default_costs['smoke_detector'] +
+            self.material_estimates['electrical']['electrical_meter'] * default_costs['electrical_meter'] +
+            self.material_estimates['electrical']['grounding_rods_count'] * default_costs['grounding_rod'] +
+            self.material_estimates['electrical']['wire_nuts_count'] * default_costs['wire_nut']
         )
         cost_estimate['electrical'] = electrical_cost
         total_cost += electrical_cost
         
-        # Plumbing costs (includes material + installation)
+        # Plumbing costs (material only)
         plumbing_cost = (
             self.material_estimates['plumbing']['fixtures'] * default_costs['plumbing_fixture'] +
             self.material_estimates['plumbing']['pipe_feet'] * default_costs['pipe'] +
             self.material_estimates['plumbing']['fittings'] * default_costs['fitting'] +
             self.material_estimates['plumbing']['water_main_connection'] * default_costs['water_main_connection'] +
-            self.material_estimates['plumbing']['sewer_connection'] * default_costs['sewer_connection']
+            self.material_estimates['plumbing']['sewer_connection'] * default_costs['sewer_connection'] +
+            self.material_estimates['plumbing']['shut_off_valves_count'] * default_costs['shut_off_valve'] +
+            self.material_estimates['plumbing']['vent_pipes_lf'] * default_costs['vent_pipe'] +
+            self.material_estimates['plumbing']['cleanouts_count'] * default_costs['cleanout'] +
+            self.material_estimates['plumbing']['water_meter'] * default_costs['water_meter'] +
+            self.material_estimates['plumbing']['pressure_tank'] * default_costs['pressure_tank'] +
+            self.material_estimates['plumbing']['sump_pump'] * default_costs['sump_pump'] +
+            self.material_estimates['plumbing']['floor_drains_count'] * default_costs['floor_drain'] +
+            self.material_estimates['plumbing']['pipe_insulation_lf'] * default_costs['pipe_insulation']
         )
         cost_estimate['plumbing'] = plumbing_cost
         total_cost += plumbing_cost
         
-        # HVAC costs (includes material + installation)
+        # HVAC costs (material only)
         hvac_cost = (
             self.material_estimates['hvac']['ductwork_linear_ft'] * default_costs['ductwork'] +
             self.material_estimates['hvac']['vents'] * default_costs['vent'] +
@@ -778,7 +960,7 @@ class HousePlanTakeoff:
         cost_estimate['hvac'] = hvac_cost
         total_cost += hvac_cost
         
-        # Hardware costs
+        # Hardware costs (material only)
         hardware_cost = (
             self.material_estimates['hardware']['nails_lbs'] * default_costs['nails'] +
             self.material_estimates['hardware']['screws_lbs'] * default_costs['screws'] +
@@ -789,7 +971,7 @@ class HousePlanTakeoff:
         cost_estimate['hardware'] = hardware_cost
         total_cost += hardware_cost
         
-        # Cabinets costs (includes material + installation)
+        # Cabinets costs (material only)
         cabinets_cost = (
             self.material_estimates['cabinets']['kitchen_cabinets_linear_ft'] * default_costs['kitchen_cabinet'] +
             self.material_estimates['cabinets']['bathroom_cabinets_count'] * default_costs['bathroom_cabinet'] +
@@ -799,7 +981,7 @@ class HousePlanTakeoff:
         cost_estimate['cabinets'] = cabinets_cost
         total_cost += cabinets_cost
         
-        # Exterior costs
+        # Exterior costs (material only)
         exterior_cost = (
             self.material_estimates['exterior']['siding_sqft'] * default_costs['siding'] +
             self.material_estimates['exterior']['gutters_linear_ft'] * default_costs['gutter'] +
@@ -821,9 +1003,7 @@ class HousePlanTakeoff:
         cost_estimate['appliances'] = appliances_cost
         total_cost += appliances_cost
         
-
-        
-        # Landscaping costs
+        # Landscaping costs (material only)
         landscaping_cost = (
             self.material_estimates['landscaping']['sod_sqft'] * default_costs['sod'] +
             self.material_estimates['landscaping']['mulch_cubic_yards'] * default_costs['mulch'] +
@@ -929,9 +1109,9 @@ class HousePlanTakeoff:
             if category not in ['total_materials', 'total_with_contingency', 'contingency_percent', 'contingency_amount']:
                 print(f"{category}: ${cost:,.2f}")
         
-        print(f"\nTotal Materials & Labor: ${cost_estimate['total_materials']:,.2f}")
+        print(f"\nTotal Materials: ${cost_estimate['total_materials']:,.2f}")
         print(f"Contingency (10%): ${cost_estimate['contingency_amount']:,.2f}")
-        print(f"TOTAL ESTIMATE: ${cost_estimate['total_with_contingency']:,.2f}")
+        print(f"TOTAL MATERIALS ESTIMATE: ${cost_estimate['total_with_contingency']:,.2f}")
 
 def main():
     """Main function to run the takeoff estimator"""
