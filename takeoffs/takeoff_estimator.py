@@ -128,6 +128,14 @@ class HousePlanTakeoff:
                     if 8 <= ceiling_height <= 20:
                         dimensions['ceiling_heights'].append(ceiling_height)
                 
+                # Look for ceiling height patterns in the text we saw: "10' - 0"", "11' - 0"", "20' - 0""
+                direct_ceiling_patterns = re.findall(r'(\d+[\'\"]?\s*-\s*0[\'\"]?)', text)
+                for ceiling in direct_ceiling_patterns:
+                    ceiling_height = self._convert_to_feet(ceiling)
+                    # More realistic ceiling heights for residential (8-12 feet)
+                    if 8 <= ceiling_height <= 12:
+                        dimensions['ceiling_heights'].append(ceiling_height)
+                
                 # Extract room names and areas - be more selective
                 # Look for common room names followed by numbers
                 room_keywords = ['LIVING', 'DINING', 'KITCHEN', 'BEDROOM', 'BATH', 'GARAGE', 'PATIO', 'PORCH', 'OFFICE', 'STUDY', 'FAMILY', 'DEN']
@@ -272,7 +280,7 @@ class HousePlanTakeoff:
             'outlets': dims['fixtures']['electrical_outlets'] or total_sqft / 100,  # 1 outlet per 100 sqft
             'light_fixtures': dims['fixtures']['light_fixtures'] or total_sqft / 200,  # 1 fixture per 200 sqft
             'switches': dims['door_count'] * 1.5,  # 1.5 switches per door
-            'wire_feet': total_sqft * 3  # 3 feet of wire per sqft
+            'wire_feet': total_sqft * 1.5  # 1.5 feet of wire per sqft (more realistic)
         }
         
         estimates['plumbing'] = {
@@ -296,6 +304,49 @@ class HousePlanTakeoff:
             'bolts_count': dims['door_count'] * 4,  # 4 bolts per door
             'hinges_count': dims['door_count'] * 3,  # 3 hinges per door
             'locks_count': dims['door_count']  # 1 lock per door
+        }
+        
+        # Add cabinets and countertops - more realistic estimates
+        estimates['cabinets'] = {
+            'kitchen_cabinets_linear_ft': 20,  # Typical kitchen has ~20 linear feet
+            'bathroom_cabinets_count': 2,  # Assume 2 bathrooms
+            'countertop_sqft': 40,  # Typical kitchen countertop ~40 sqft
+            'sink_count': 3  # Kitchen + 2 bathrooms
+        }
+        
+        # Add exterior materials - more realistic estimates
+        estimates['exterior'] = {
+            'siding_sqft': total_sqft * 0.8,  # 80% of floor area for exterior walls
+            'gutters_linear_ft': perimeter * 0.8,  # 80% of perimeter
+            'downspouts_count': 4,  # 4 downspouts typical
+            'exterior_paint_gallons': (total_sqft * 0.8) / 300  # 300 sqft per gallon
+        }
+        
+        # Add appliances (basic estimates)
+        estimates['appliances'] = {
+            'refrigerator': 1,
+            'stove': 1,
+            'dishwasher': 1,
+            'washer': 1,
+            'dryer': 1,
+            'water_heater': 1
+        }
+        
+        # Add permits and fees
+        estimates['permits_fees'] = {
+            'building_permit': 1,
+            'electrical_permit': 1,
+            'plumbing_permit': 1,
+            'hvac_permit': 1,
+            'inspection_fees': 8  # Multiple inspections
+        }
+        
+        # Add landscaping (basic)
+        estimates['landscaping'] = {
+            'sod_sqft': total_sqft * 0.5,  # 50% of house area for lawn
+            'mulch_cubic_yards': 5,  # 5 cubic yards typical
+            'plants_count': 20,  # 20 plants/shrubs
+            'irrigation_system': 1
         }
         
         self.material_estimates = estimates
@@ -343,7 +394,30 @@ class HousePlanTakeoff:
             'screws': 3.0,  # per lb
             'bolts': 1.0,  # per bolt
             'hinges': 5.0,  # per hinge
-            'locks': 25  # per lock
+            'locks': 25,  # per lock
+            'kitchen_cabinet': 200,  # per linear foot
+            'bathroom_cabinet': 300,  # per cabinet
+            'countertop': 50,  # per sqft
+            'sink': 150,  # per sink
+            'siding': 8.0,  # per sqft
+            'gutter': 10.0,  # per linear foot
+            'downspout': 50,  # per downspout
+            'exterior_paint': 40,  # per gallon
+            'refrigerator': 1200,
+            'stove': 800,
+            'dishwasher': 600,
+            'washer': 700,
+            'dryer': 700,
+            'water_heater': 800,
+            'building_permit': 2000,  # per permit
+            'electrical_permit': 200,  # per permit
+            'plumbing_permit': 200,  # per permit
+            'hvac_permit': 200,  # per permit
+            'inspection_fee': 150,  # per inspection
+            'sod': 2.0,  # per sqft
+            'mulch': 30,  # per cubic yard
+            'plant': 25,  # per plant
+            'irrigation_system': 2000  # per system
         }
         
         if material_costs:
@@ -457,6 +531,59 @@ class HousePlanTakeoff:
         )
         cost_estimate['hardware'] = hardware_cost
         total_cost += hardware_cost
+        
+        # Cabinets costs
+        cabinets_cost = (
+            self.material_estimates['cabinets']['kitchen_cabinets_linear_ft'] * default_costs['kitchen_cabinet'] +
+            self.material_estimates['cabinets']['bathroom_cabinets_count'] * default_costs['bathroom_cabinet'] +
+            self.material_estimates['cabinets']['countertop_sqft'] * default_costs['countertop'] +
+            self.material_estimates['cabinets']['sink_count'] * default_costs['sink']
+        )
+        cost_estimate['cabinets'] = cabinets_cost
+        total_cost += cabinets_cost
+        
+        # Exterior costs
+        exterior_cost = (
+            self.material_estimates['exterior']['siding_sqft'] * default_costs['siding'] +
+            self.material_estimates['exterior']['gutters_linear_ft'] * default_costs['gutter'] +
+            self.material_estimates['exterior']['downspouts_count'] * default_costs['downspout'] +
+            self.material_estimates['exterior']['exterior_paint_gallons'] * default_costs['exterior_paint']
+        )
+        cost_estimate['exterior'] = exterior_cost
+        total_cost += exterior_cost
+        
+        # Appliances costs
+        appliances_cost = (
+            self.material_estimates['appliances']['refrigerator'] * default_costs['refrigerator'] +
+            self.material_estimates['appliances']['stove'] * default_costs['stove'] +
+            self.material_estimates['appliances']['dishwasher'] * default_costs['dishwasher'] +
+            self.material_estimates['appliances']['washer'] * default_costs['washer'] +
+            self.material_estimates['appliances']['dryer'] * default_costs['dryer'] +
+            self.material_estimates['appliances']['water_heater'] * default_costs['water_heater']
+        )
+        cost_estimate['appliances'] = appliances_cost
+        total_cost += appliances_cost
+        
+        # Permits and fees costs
+        permits_cost = (
+            self.material_estimates['permits_fees']['building_permit'] * default_costs['building_permit'] +
+            self.material_estimates['permits_fees']['electrical_permit'] * default_costs['electrical_permit'] +
+            self.material_estimates['permits_fees']['plumbing_permit'] * default_costs['plumbing_permit'] +
+            self.material_estimates['permits_fees']['hvac_permit'] * default_costs['hvac_permit'] +
+            self.material_estimates['permits_fees']['inspection_fees'] * default_costs['inspection_fee']
+        )
+        cost_estimate['permits_fees'] = permits_cost
+        total_cost += permits_cost
+        
+        # Landscaping costs
+        landscaping_cost = (
+            self.material_estimates['landscaping']['sod_sqft'] * default_costs['sod'] +
+            self.material_estimates['landscaping']['mulch_cubic_yards'] * default_costs['mulch'] +
+            self.material_estimates['landscaping']['plants_count'] * default_costs['plant'] +
+            self.material_estimates['landscaping']['irrigation_system'] * default_costs['irrigation_system']
+        )
+        cost_estimate['landscaping'] = landscaping_cost
+        total_cost += landscaping_cost
         
         cost_estimate['total_materials'] = total_cost
         cost_estimate['labor_multiplier'] = 1.5  # 50% labor markup
