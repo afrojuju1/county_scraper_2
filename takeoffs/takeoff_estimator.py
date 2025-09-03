@@ -164,6 +164,13 @@ class HousePlanTakeoff:
             'window_count': 0,
             'ceiling_heights': [],
             'room_details': {},
+            'rooms_by_floor': {  # NEW: Track rooms by floor
+                'first_floor': {},
+                'second_floor': {},
+                'third_floor': {},
+                'basement': {},
+                'unknown': {}
+            },
             'fixtures': {
                 'electrical_outlets': 0,
                 'light_fixtures': 0,
@@ -177,6 +184,29 @@ class HousePlanTakeoff:
         found_areas = set()
         total_door_count = 0
         total_window_count = 0
+        current_floor = 'unknown'  # Track which floor we're currently processing
+        
+        def add_room_to_floor(room_key, room_data, floor=None):
+            """Helper function to add room to both room_details and rooms_by_floor"""
+            # Add to main room_details
+            if room_key in dimensions['room_details']:
+                if isinstance(dimensions['room_details'][room_key], dict):
+                    existing = dimensions['room_details'][room_key]
+                    dimensions['room_details'][room_key] = [existing]
+                dimensions['room_details'][room_key].append(room_data)
+            else:
+                dimensions['room_details'][room_key] = room_data
+            
+            # Add to floor-specific tracking
+            target_floor = floor or current_floor
+            if target_floor in dimensions['rooms_by_floor']:
+                if room_key in dimensions['rooms_by_floor'][target_floor]:
+                    if isinstance(dimensions['rooms_by_floor'][target_floor][room_key], dict):
+                        existing = dimensions['rooms_by_floor'][target_floor][room_key]
+                        dimensions['rooms_by_floor'][target_floor][room_key] = [existing]
+                    dimensions['rooms_by_floor'][target_floor][room_key].append(room_data)
+                else:
+                    dimensions['rooms_by_floor'][target_floor][room_key] = room_data
         
         with pdfplumber.open(self.pdf_path) as pdf:
             for page_num, page in enumerate(pdf.pages):
@@ -186,15 +216,25 @@ class HousePlanTakeoff:
                 
                 # Look for total square footage more aggressively
                 # Pattern from the PDF: "FIRST FLOOR LIVING 598" and "SECOND FLOOR LIVING 1000"
-                # Only match if it's followed by a reasonable square footage (100+ sqft)
-                floor_patterns = re.findall(r'(?:FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(?:LIVING|AREA)?\s*(\d+)', text, re.IGNORECASE)
+                # IMPORTANT: These are FLOOR AREAS, not individual living rooms!
+                floor_patterns = re.findall(r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(?:LIVING|AREA)?\s*(\d+)', text, re.IGNORECASE)
                 total_floor_area = 0
-                for i, area in enumerate(floor_patterns):
+                for floor_name, area in floor_patterns:
                     floor_area = int(area)
                     # Only count as floor area if it's a reasonable size (100+ sqft)
                     if floor_area >= 100:
                         total_floor_area += floor_area
-                        dimensions['floor_areas'][f'floor_{i+1}'] = floor_area
+                        floor_key = f'{floor_name.lower()}_floor'
+                        dimensions['floor_areas'][floor_key] = floor_area
+                        current_floor = floor_key  # Update current floor context
+                        self.logger.info(f"Found floor area: {floor_name} FLOOR = {floor_area} sqft - Setting floor context to {floor_key}")
+                
+                # Also detect floor context from page headers or titles
+                floor_context_patterns = re.findall(r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR', text, re.IGNORECASE)
+                if floor_context_patterns and current_floor == 'unknown':
+                    floor_name = floor_context_patterns[0].lower() + '_floor'
+                    current_floor = floor_name
+                    self.logger.info(f"Detected floor context from header: {floor_name}")
                 
                 if total_floor_area > 0:
                     dimensions['total_sqft'] = total_floor_area
@@ -290,19 +330,29 @@ class HousePlanTakeoff:
                     if 8 <= ceiling_height <= 11:
                         dimensions['ceiling_heights'].append(ceiling_height)
                 
-                # Extract room names and areas - be more selective and avoid duplicates
-                # Look for common room names followed by numbers, but be more specific
-                room_keywords = ['LIVING', 'DINING', 'KITCHEN', 'BEDROOM', 'BATH', 'GARAGE', 'PATIO', 'PORCH', 'OFFICE', 'STUDY', 'FAMILY', 'DEN', 'MASTER', 'CLOSET', 'LAUNDRY', 'POWDER', 'HALF', 'BREAKFAST', 'GREAT', 'LOFT', 'BONUS', 'FOYER', 'ENTRY', 'HALL', 'UTILITY', 'PANTRY', 'MUDROOM', 'SUNROOM', 'LIBRARY', 'MEDIA', 'GAME', 'RECREATION', 'EXERCISE', 'WORKSHOP']
+                # Extract ACTUAL room names and areas - EXCLUDE floor area patterns
+                # CRITICAL: Avoid matching "FIRST FLOOR LIVING" patterns which are floor totals, not rooms
                 
-                # Use the found_areas set from outside the loop
+                # First, identify floor area patterns to exclude them
+                floor_area_patterns = set()
+                floor_matches = re.findall(r'(?:FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(?:LIVING|AREA)?\s*(\d+)', text, re.IGNORECASE)
+                for area in floor_matches:
+                    floor_area_patterns.add(int(area))
+                
+                # Room keywords - but we'll be very careful with LIVING
+                room_keywords = ['DINING', 'KITCHEN', 'BEDROOM', 'BATH', 'GARAGE', 'PATIO', 'PORCH', 'OFFICE', 'STUDY', 'FAMILY', 'DEN', 'MASTER', 'CLOSET', 'LAUNDRY', 'POWDER', 'HALF', 'BREAKFAST', 'GREAT', 'LOFT', 'BONUS', 'FOYER', 'ENTRY', 'HALL', 'UTILITY', 'PANTRY', 'MUDROOM', 'SUNROOM', 'LIBRARY', 'MEDIA', 'GAME', 'RECREATION', 'EXERCISE', 'WORKSHOP']
                 
                 for keyword in room_keywords:
-                    # More specific patterns to avoid false matches
-                    # Skip LIVING to avoid confusion with floor areas
-                    room_patterns = re.findall(rf'{keyword}\s+(\d+)(?:\s|$)', text, re.IGNORECASE)
+                    # Look for room patterns, but exclude floor area matches
+                    room_patterns = re.findall(rf'(?<!FLOOR\s){keyword}\s+(\d+)(?:\s|$)', text, re.IGNORECASE)
                     for area in room_patterns:
                         if area.isdigit() and 20 <= int(area) <= 2000:
                             area_val = int(area)
+                            # Skip if this area matches a floor area (avoid double-counting)
+                            if area_val in floor_area_patterns:
+                                self.logger.warning(f"Skipping {keyword} {area_val} - matches floor area pattern")
+                                continue
+                                
                             # Avoid duplicates by checking if we've seen this area before
                             if area_val not in found_areas:
                                 found_areas.add(area_val)
@@ -324,6 +374,37 @@ class HousePlanTakeoff:
                                         'name': keyword,
                                         'area': area_val
                                     }
+                                self.logger.info(f"Found room: {keyword} = {area_val} sqft")
+                
+                # Handle LIVING rooms separately with extra caution
+                # Only match "LIVING ROOM 300" or "LIVING 300" but NOT "FIRST FLOOR LIVING 598"
+                living_patterns = re.findall(r'(?<!FLOOR\s)(?:LIVING\s+(?:ROOM\s+)?|LIVING\s+)(\d+)(?:\s|$)', text, re.IGNORECASE)
+                for area in living_patterns:
+                    if area.isdigit() and 100 <= int(area) <= 800:  # Living rooms are typically 100-800 sqft
+                        area_val = int(area)
+                        # Skip if this area matches a floor area
+                        if area_val in floor_area_patterns:
+                            self.logger.warning(f"Skipping LIVING {area_val} - matches floor area pattern")
+                            continue
+                            
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            room_key = 'living'
+                            
+                            if room_key in dimensions['room_details']:
+                                if isinstance(dimensions['room_details'][room_key], dict):
+                                    existing = dimensions['room_details'][room_key]
+                                    dimensions['room_details'][room_key] = [existing]
+                                dimensions['room_details'][room_key].append({
+                                    'name': 'LIVING ROOM',
+                                    'area': area_val
+                                })
+                            else:
+                                dimensions['room_details'][room_key] = {
+                                    'name': 'LIVING ROOM',
+                                    'area': area_val
+                                }
+                            self.logger.info(f"Found room: LIVING ROOM = {area_val} sqft")
                 
                 # Additional room extraction patterns for specific room types
                 # Look for bedroom patterns like "BEDROOM 1", "BED 1", "BR 1"
@@ -366,6 +447,166 @@ class HousePlanTakeoff:
                                 'name': 'KITCHEN',
                                 'area': area_val
                             }
+                
+                # Look for family room patterns (common in house plans)
+                family_patterns = re.findall(r'(?:FAMILY\s+ROOM|FAMILY)\s+(\d+)', text, re.IGNORECASE)
+                for area in family_patterns:
+                    if area.isdigit() and 100 <= int(area) <= 600:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            dimensions['room_details']['family'] = {
+                                'name': 'FAMILY ROOM',
+                                'area': area_val
+                            }
+                            self.logger.info(f"Found room: FAMILY ROOM = {area_val} sqft")
+                
+                # Look for great room patterns (common in modern plans)
+                great_patterns = re.findall(r'(?:GREAT\s+ROOM|GREAT)\s+(\d+)', text, re.IGNORECASE)
+                for area in great_patterns:
+                    if area.isdigit() and 200 <= int(area) <= 800:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            dimensions['room_details']['great'] = {
+                                'name': 'GREAT ROOM',
+                                'area': area_val
+                            }
+                            self.logger.info(f"Found room: GREAT ROOM = {area_val} sqft")
+                
+                # Look for bonus room patterns
+                bonus_patterns = re.findall(r'(?:BONUS\s+ROOM|BONUS)\s+(\d+)', text, re.IGNORECASE)
+                for area in bonus_patterns:
+                    if area.isdigit() and 80 <= int(area) <= 400:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            dimensions['room_details']['bonus'] = {
+                                'name': 'BONUS ROOM',
+                                'area': area_val
+                            }
+                            self.logger.info(f"Found room: BONUS ROOM = {area_val} sqft")
+                
+                # Look for dining room patterns
+                dining_patterns = re.findall(r'(?:DINING\s+ROOM|DINING)\s+(\d+)', text, re.IGNORECASE)
+                for area in dining_patterns:
+                    if area.isdigit() and 80 <= int(area) <= 300:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            dimensions['room_details']['dining'] = {
+                                'name': 'DINING ROOM',
+                                'area': area_val
+                            }
+                            self.logger.info(f"Found room: DINING ROOM = {area_val} sqft")
+                
+                # Look for master bedroom patterns
+                master_patterns = re.findall(r'(?:MASTER\s+BEDROOM|MASTER\s+BR|MASTER)\s+(\d+)', text, re.IGNORECASE)
+                for area in master_patterns:
+                    if area.isdigit() and 120 <= int(area) <= 400:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            dimensions['room_details']['master_bedroom'] = {
+                                'name': 'MASTER BEDROOM',
+                                'area': area_val
+                            }
+                            self.logger.info(f"Found room: MASTER BEDROOM = {area_val} sqft")
+                
+                # Look for master bathroom patterns
+                master_bath_patterns = re.findall(r'(?:MASTER\s+BATH|MASTER\s+BATHROOM)\s+(\d+)', text, re.IGNORECASE)
+                for area in master_bath_patterns:
+                    if area.isdigit() and 40 <= int(area) <= 150:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            dimensions['room_details']['master_bathroom'] = {
+                                'name': 'MASTER BATHROOM',
+                                'area': area_val
+                            }
+                            self.logger.info(f"Found room: MASTER BATHROOM = {area_val} sqft")
+                
+                # Look for laundry room patterns
+                laundry_patterns = re.findall(r'(?:LAUNDRY\s+ROOM|LAUNDRY|UTILITY\s+ROOM|UTILITY)\s+(\d+)', text, re.IGNORECASE)
+                for area in laundry_patterns:
+                    if area.isdigit() and 30 <= int(area) <= 120:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            dimensions['room_details']['laundry'] = {
+                                'name': 'LAUNDRY ROOM',
+                                'area': area_val
+                            }
+                            self.logger.info(f"Found room: LAUNDRY ROOM = {area_val} sqft")
+                
+                # Look for office/study patterns
+                office_patterns = re.findall(r'(?:OFFICE|STUDY|DEN)\s+(\d+)', text, re.IGNORECASE)
+                for area in office_patterns:
+                    if area.isdigit() and 80 <= int(area) <= 250:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            dimensions['room_details']['office'] = {
+                                'name': 'OFFICE',
+                                'area': area_val
+                            }
+                            self.logger.info(f"Found room: OFFICE = {area_val} sqft")
+                
+                # Look for foyer/entry patterns
+                foyer_patterns = re.findall(r'(?:FOYER|ENTRY|ENTRYWAY)\s+(\d+)', text, re.IGNORECASE)
+                for area in foyer_patterns:
+                    if area.isdigit() and 20 <= int(area) <= 100:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            dimensions['room_details']['foyer'] = {
+                                'name': 'FOYER',
+                                'area': area_val
+                            }
+                            self.logger.info(f"Found room: FOYER = {area_val} sqft")
+                
+                # Look for closet patterns (walk-in closets)
+                closet_patterns = re.findall(r'(?:WALK.IN\s+CLOSET|WIC|W\.I\.C\.)\s+(\d+)', text, re.IGNORECASE)
+                for area in closet_patterns:
+                    if area.isdigit() and 15 <= int(area) <= 80:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            if 'closets' not in dimensions['room_details']:
+                                dimensions['room_details']['closets'] = []
+                            dimensions['room_details']['closets'].append({
+                                'name': 'WALK-IN CLOSET',
+                                'area': area_val
+                            })
+                            self.logger.info(f"Found room: WALK-IN CLOSET = {area_val} sqft")
+                
+                # Look for pantry patterns
+                pantry_patterns = re.findall(r'(?:PANTRY)\s+(\d+)', text, re.IGNORECASE)
+                for area in pantry_patterns:
+                    if area.isdigit() and 15 <= int(area) <= 60:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            dimensions['room_details']['pantry'] = {
+                                'name': 'PANTRY',
+                                'area': area_val
+                            }
+                            self.logger.info(f"Found room: PANTRY = {area_val} sqft")
+                
+                # Look for hall/hallway patterns
+                hall_patterns = re.findall(r'(?:HALL|HALLWAY)\s+(\d+)', text, re.IGNORECASE)
+                for area in hall_patterns:
+                    if area.isdigit() and 20 <= int(area) <= 150:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            if 'halls' not in dimensions['room_details']:
+                                dimensions['room_details']['halls'] = []
+                            dimensions['room_details']['halls'].append({
+                                'name': 'HALLWAY',
+                                'area': area_val
+                            })
+                            self.logger.info(f"Found room: HALLWAY = {area_val} sqft")
                 
                 # Count fixtures more accurately with CONSERVATIVE patterns
                 # Electrical outlets - only count explicit outlet references, avoid voltage/dimension matches
@@ -421,6 +662,58 @@ class HousePlanTakeoff:
         # If still no sqft, use a reasonable default based on the house plan
         if dimensions['total_sqft'] == 0:
             dimensions['total_sqft'] = 2072  # From the PDF: TOTAL COVERED 2072 (includes living + garage + patios)
+        
+        # Validate and log the extracted data structure
+        self.logger.info("=== EXTRACTED DATA VALIDATION ===")
+        self.logger.info(f"Total house area: {dimensions['total_sqft']} sqft")
+        
+        # Log floor areas
+        if dimensions['floor_areas']:
+            self.logger.info("Floor Areas:")
+            total_floor_area = 0
+            for floor_name, area in dimensions['floor_areas'].items():
+                self.logger.info(f"  {floor_name}: {area} sqft")
+                total_floor_area += area
+            self.logger.info(f"  Total floor area: {total_floor_area} sqft")
+        
+        # Log room details and calculate total room area
+        if dimensions['room_details']:
+            self.logger.info("Individual Rooms:")
+            total_room_area = 0
+            room_count = 0
+            for room_type, room_data in dimensions['room_details'].items():
+                if isinstance(room_data, list):
+                    for room in room_data:
+                        self.logger.info(f"  {room['name']}: {room['area']} sqft")
+                        total_room_area += room['area']
+                        room_count += 1
+                else:
+                    self.logger.info(f"  {room_data['name']}: {room_data['area']} sqft")
+                    total_room_area += room_data['area']
+                    room_count += 1
+            self.logger.info(f"  Total room area: {total_room_area} sqft")
+            self.logger.info(f"  Total room count: {room_count}")
+            
+            # Validation check
+            if total_room_area > dimensions['total_sqft'] * 1.2:
+                self.logger.warning(f"Room areas ({total_room_area}) exceed house area ({dimensions['total_sqft']}) by >20% - possible double counting!")
+        
+        self.logger.info("=== END VALIDATION ===")
+        
+        # Store validation data for later use
+        dimensions['validation'] = {
+            'total_house_sqft': dimensions['total_sqft'],
+            'total_floor_area': sum(dimensions['floor_areas'].values()) if dimensions['floor_areas'] else 0,
+            'total_room_area': sum(
+                sum(room['area'] for room in room_data) if isinstance(room_data, list) 
+                else room_data['area'] 
+                for room_data in dimensions['room_details'].values()
+            ) if dimensions['room_details'] else 0,
+            'room_count': sum(
+                len(room_data) if isinstance(room_data, list) else 1 
+                for room_data in dimensions['room_details'].values()
+            ) if dimensions['room_details'] else 0
+        }
         
         # Add default room estimates if we don't have enough room details
         # This helps provide a more complete takeoff estimate
@@ -539,15 +832,15 @@ class HousePlanTakeoff:
             'total_cubic_yards': (total_sqft * 0.2 + driveway_sqft + sidewalk_sqft) / 27  # Convert to cubic yards
         }
         
-        # Foundation materials (NEW CATEGORY)
+        # Foundation materials (REALISTIC QUANTITIES)
         foundation_perimeter = perimeter * 0.8  # 80% of house perimeter for foundation walls
         estimates['foundation'] = {
-            'rebar_tons': total_sqft * 0.002,  # 0.002 tons per sqft
-            'foundation_bolts_count': int(foundation_perimeter / 6),  # 1 bolt per 6 feet
-            'vapor_barrier_sqft': total_sqft * 1.1,  # 110% of house area
-            'waterproofing_sqft': foundation_perimeter * 8,  # 8 ft high foundation walls
-            'gravel_cubic_yards': total_sqft * 0.05 / 27,  # Base gravel
-            'form_boards_bf': foundation_perimeter * 16  # 2x8 forms, both sides
+            'rebar_tons': total_sqft * 0.0004,  # 0.0004 tons per sqft (reduced from 0.002 - was 5x too much!)
+            'foundation_bolts_count': int(foundation_perimeter / 8),  # 1 bolt per 8 feet (reduced from 6)
+            'vapor_barrier_sqft': total_sqft,  # 100% of house area (reduced from 110%)
+            'waterproofing_sqft': foundation_perimeter * 6,  # 6 ft high foundation walls (reduced from 8)
+            'gravel_cubic_yards': total_sqft * 0.03 / 27,  # Base gravel (reduced from 0.05)
+            'form_boards_bf': foundation_perimeter * 8  # 2x8 forms, one side reused (reduced from 16)
         }
         
         estimates['lumber'] = {
@@ -583,11 +876,11 @@ class HousePlanTakeoff:
             'wall_sqft': wall_area,
             'ceiling_sqft': total_sqft,
             'total_sqft': wall_area + total_sqft,
-            # Additional insulation materials
-            'house_wrap_sqft': wall_area * 1.1,  # 110% for overlap
-            'foam_board_sqft': wall_area * 0.3,  # 30% foam board supplement
-            'caulk_tubes': int(perimeter / 10),  # 1 tube per 10 feet
-            'weatherstripping_lf': dims['door_count'] * 20 + dims['window_count'] * 15  # Doors + windows
+            # Additional insulation materials (REDUCED for standard construction)
+            'house_wrap_sqft': wall_area * 1.05,  # 105% for overlap (reduced from 110%)
+            'foam_board_sqft': wall_area * 0.1,  # 10% foam board supplement (reduced from 30% - not standard everywhere)
+            'caulk_tubes': int(perimeter / 15),  # 1 tube per 15 feet (reduced from 10)
+            'weatherstripping_lf': dims['door_count'] * 16 + dims['window_count'] * 12  # Doors + windows (reduced)
         }
         
         estimates['drywall'] = {
@@ -601,11 +894,10 @@ class HousePlanTakeoff:
             'tile_sqft': total_sqft * 0.3,  # 30% tile areas
             'carpet_sqft': total_sqft * 0.4,  # 40% carpet
             'hardwood_sqft': total_sqft * 0.3,  # 30% hardwood
-            # Installation materials
-            'subfloor_sqft': total_sqft,  # Plywood/OSB subflooring
-            'underlayment_sqft': total_sqft * 0.7,  # 70% needs underlayment
-            'transition_strips_lf': int(total_rooms * 8),  # Room transitions
-            'floor_adhesive_gallons': int(total_sqft * 0.3 / 200),  # For tile areas
+            # Installation materials (REMOVED subfloor - already in lumber sheathing)
+            'underlayment_sqft': total_sqft * 0.5,  # 50% needs underlayment (reduced from 70%)
+            'transition_strips_lf': int(total_rooms * 6),  # Room transitions (reduced from 8)
+            'floor_adhesive_gallons': int(total_sqft * 0.3 / 250),  # For tile areas (reduced coverage)
             'carpet_padding_sqft': total_sqft * 0.4  # Under carpet
         }
         
@@ -644,10 +936,14 @@ class HousePlanTakeoff:
         else:
             realistic_outlets = extracted_outlets
         
-        # Light fixtures - use extracted or estimate based on rooms
+        # Light fixtures - use extracted data when available, minimal fallback
         extracted_lights = dims['fixtures']['light_fixtures']
-        min_lights = total_rooms  # At least 1 per room
-        realistic_lights = max(extracted_lights, min_lights)
+        if extracted_lights > 0:
+            realistic_lights = extracted_lights  # Use actual extracted data
+            self.logger.info(f"Using extracted light fixtures: {extracted_lights}")
+        else:
+            realistic_lights = max(8, int(total_sqft / 300))  # Minimal fallback: 1 per 300 sqft
+            self.logger.info(f"No light fixtures extracted, using minimal estimate: {realistic_lights}")
         
         estimates['electrical'] = {
             'outlets': realistic_outlets,
@@ -868,12 +1164,11 @@ class HousePlanTakeoff:
         cost_estimate['drywall'] = drywall_cost
         total_cost += drywall_cost
         
-        # Flooring costs (material only)
+        # Flooring costs (material only) - subfloor removed (already in lumber)
         flooring_cost = (
             self.material_estimates['flooring']['tile_sqft'] * default_costs['tile'] +
             self.material_estimates['flooring']['carpet_sqft'] * default_costs['carpet'] +
             self.material_estimates['flooring']['hardwood_sqft'] * default_costs['hardwood'] +
-            self.material_estimates['flooring']['subfloor_sqft'] * default_costs['subfloor'] +
             self.material_estimates['flooring']['underlayment_sqft'] * default_costs['underlayment'] +
             self.material_estimates['flooring']['transition_strips_lf'] * default_costs['transition_strip'] +
             self.material_estimates['flooring']['floor_adhesive_gallons'] * default_costs['floor_adhesive'] +
@@ -1136,7 +1431,7 @@ def main():
         
         # Print summary
         estimator.print_summary()
-        
+      
         # Export results
         output_file = f"takeoff_estimate_{Path(pdf_file).stem}.json"
         estimator.export_results(output_file)
