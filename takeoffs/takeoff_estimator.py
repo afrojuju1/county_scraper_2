@@ -214,6 +214,70 @@ class HousePlanTakeoff:
                 if not text:
                     continue
                 
+                # Look for specific room patterns that we can extract from the PDF
+                # Try to find room labels followed by dimensions or areas
+                room_dimension_patterns = re.findall(r'([A-Z][A-Z\s]{2,15})\s+(\d+[\'\"]?\s*-\s*\d+[\'\"]?|\d+)\s*(?:SQ\.?\s*FT\.?|SQUARE\s*FEET?)?', text, re.IGNORECASE)
+                
+                # Process room dimension patterns to extract actual rooms
+                for room_name, dimension in room_dimension_patterns:
+                    room_name_clean = room_name.strip()
+                    # Skip obvious non-room text and garbled text
+                    skip_words = ['CITY', 'HOUSTON', 'PROJECT', 'DESIGN', 'CUSTOM', 'HOME', 'REVIEWED', 'COMPLIANCE', 
+                                 'RST FLOOR', 'OND FLOOR', 'TOTAL', 'BUILDING', 'HALL BE', 'SHALL BE', 'MAX OF',
+                                 'TILED TO', 'COVERED', 'FLOOR LIVING']
+                    if any(skip_word in room_name_clean.upper() for skip_word in skip_words):
+                        continue
+                    
+                    # Skip garbled or incomplete room names
+                    if len(room_name_clean) < 3 or 'BE ' in room_name_clean or 'TO ' in room_name_clean:
+                        continue
+                    
+                    # Try to extract area from dimension
+                    if dimension.isdigit():
+                        area_val = int(dimension)
+                        # Only process reasonable room sizes
+                        if 20 <= area_val <= 2000 and area_val not in found_areas:
+                            found_areas.add(area_val)
+                            
+                            # Map common room types
+                            room_type = self._map_room_type(room_name_clean)
+                            if room_type:
+                                add_room_to_floor(room_type, {
+                                    'name': room_name_clean,
+                                    'area': area_val
+                                }, current_floor)
+                                self.logger.info(f"Found room: {room_name_clean} = {area_val} sqft")
+                
+                # Also look for simple room name + number patterns
+                simple_room_patterns = re.findall(r'([A-Z][A-Z\s]{2,12})\s+(\d+)', text)
+                for room_name, number in simple_room_patterns:
+                    room_name_clean = room_name.strip()
+                    # Skip obvious non-room text and garbled text
+                    skip_words = ['CITY', 'HOUSTON', 'PROJECT', 'DESIGN', 'CUSTOM', 'HOME', 'REVIEWED', 'COMPLIANCE',
+                                 'RST FLOOR', 'OND FLOOR', 'TOTAL', 'BUILDING', 'HALL BE', 'SHALL BE', 'MAX OF',
+                                 'TILED TO', 'COVERED', 'FLOOR LIVING']
+                    if any(skip_word in room_name_clean.upper() for skip_word in skip_words):
+                        continue
+                    
+                    # Skip garbled or incomplete room names
+                    if len(room_name_clean) < 3 or 'BE ' in room_name_clean or 'TO ' in room_name_clean:
+                        continue
+                    
+                    if number.isdigit():
+                        area_val = int(number)
+                        # Only process reasonable room sizes
+                        if 20 <= area_val <= 2000 and area_val not in found_areas:
+                            found_areas.add(area_val)
+                            
+                            # Map common room types
+                            room_type = self._map_room_type(room_name_clean)
+                            if room_type:
+                                add_room_to_floor(room_type, {
+                                    'name': room_name_clean,
+                                    'area': area_val
+                                }, current_floor)
+                                self.logger.info(f"Found room: {room_name_clean} = {area_val} sqft")
+                
                 # Look for total square footage more aggressively
                 # Pattern from the PDF: "FIRST FLOOR LIVING 598" and "SECOND FLOOR LIVING 1000"
                 # IMPORTANT: These are FLOOR AREAS, not individual living rooms!
@@ -720,7 +784,11 @@ class HousePlanTakeoff:
         if len(dimensions['room_details']) < 5:  # If we have fewer than 5 room types
             total_sqft = dimensions['total_sqft']
             
-            # Estimate typical rooms based on total square footage
+            # Get floor areas for better room distribution
+            first_floor_area = dimensions['floor_areas'].get('first_floor', 0)
+            second_floor_area = dimensions['floor_areas'].get('second_floor', 0)
+            
+            # Estimate typical rooms based on total square footage and floor distribution
             if 'bedroom' not in dimensions['room_details']:
                 # Estimate 2-4 bedrooms for a 2400+ sqft house
                 num_bedrooms = min(4, max(2, int(total_sqft / 600)))
@@ -744,23 +812,77 @@ class HousePlanTakeoff:
                     })
             
             if 'kitchen' not in dimensions['room_details']:
-                # Estimate kitchen size
-                kitchen_size = min(200, max(120, int(total_sqft / 12)))
+                # Estimate kitchen size - typically on first floor
+                kitchen_size = min(200, max(120, int(first_floor_area / 4)))
                 dimensions['room_details']['kitchen'] = {
                     'name': 'KITCHEN',
                     'area': kitchen_size
                 }
             
             if 'dining' not in dimensions['room_details']:
-                # Estimate dining room size
-                dining_size = min(150, max(80, int(total_sqft / 20)))
+                # Estimate dining room size - typically on first floor
+                dining_size = min(150, max(80, int(first_floor_area / 6)))
                 dimensions['room_details']['dining'] = {
                     'name': 'DINING',
                     'area': dining_size
                 }
+            
+            # Add living room if not found
+            if 'living' not in dimensions['room_details']:
+                # Estimate living room size - typically on first floor
+                living_size = min(300, max(200, int(first_floor_area / 3)))
+                dimensions['room_details']['living'] = {
+                    'name': 'LIVING ROOM',
+                    'area': living_size
+                }
+            
+            # Add family room if we have second floor
+            if second_floor_area > 0 and 'family' not in dimensions['room_details']:
+                family_size = min(250, max(150, int(second_floor_area / 4)))
+                dimensions['room_details']['family'] = {
+                    'name': 'FAMILY ROOM',
+                    'area': family_size
+                }
         
         self.extracted_data['dimensions'] = dimensions
         return dimensions
+    
+    def _map_room_type(self, room_name: str) -> str:
+        """Map room name to standardized room type"""
+        room_name_upper = room_name.upper()
+        
+        # Map common room types
+        if any(word in room_name_upper for word in ['BEDROOM', 'BED', 'BR']):
+            return 'bedroom'
+        elif any(word in room_name_upper for word in ['BATH', 'BATHROOM', 'POWDER']):
+            return 'bathroom'
+        elif any(word in room_name_upper for word in ['KITCHEN', 'KIT']):
+            return 'kitchen'
+        elif any(word in room_name_upper for word in ['DINING', 'DIN']):
+            return 'dining'
+        elif any(word in room_name_upper for word in ['LIVING', 'LIV']):
+            return 'living'
+        elif any(word in room_name_upper for word in ['FAMILY', 'FAM']):
+            return 'family'
+        elif any(word in room_name_upper for word in ['GARAGE', 'GAR']):
+            return 'garage'
+        elif any(word in room_name_upper for word in ['PATIO', 'DECK', 'PORCH']):
+            return 'patio'
+        elif any(word in room_name_upper for word in ['OFFICE', 'STUDY', 'DEN']):
+            return 'office'
+        elif any(word in room_name_upper for word in ['LAUNDRY', 'UTILITY']):
+            return 'laundry'
+        elif any(word in room_name_upper for word in ['CLOSET', 'WALK-IN']):
+            return 'closet'
+        elif any(word in room_name_upper for word in ['FOYER', 'ENTRY', 'HALL']):
+            return 'foyer'
+        elif any(word in room_name_upper for word in ['PANTRY']):
+            return 'pantry'
+        elif any(word in room_name_upper for word in ['MASTER']):
+            return 'master'
+        else:
+            # Return None for unrecognized room types
+            return None
     
     def _convert_to_feet(self, dimension_str: str) -> float:
         """Convert dimension string to feet"""
