@@ -12,6 +12,15 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import pandas as pd
 
+# Enhanced PDF extraction imports
+import fitz  # PyMuPDF
+import pytesseract
+from pdf2image import convert_from_path
+import easyocr
+import cv2
+import numpy as np
+from PIL import Image
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -143,6 +152,187 @@ class TakeoffConfig:
     # Material + Labor combined costs (more realistic approach)
     # These already include reasonable labor, so no additional multipliers needed
 
+class EnhancedPDFExtractor:
+    """Enhanced PDF text extraction using multiple methods"""
+    
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        # Initialize EasyOCR reader (only once for performance)
+        try:
+            self.easyocr_reader = easyocr.Reader(['en'])
+            self.logger.info("EasyOCR initialized successfully")
+        except Exception as e:
+            self.logger.warning(f"EasyOCR initialization failed: {e}")
+            self.easyocr_reader = None
+    
+    def extract_text_multiple_methods(self, pdf_path: str) -> Dict[str, List[str]]:
+        """Extract text using multiple methods and return results"""
+        results = {
+            'pdfplumber': [],
+            'pymupdf': [],
+            'tesseract_ocr': [],
+            'easyocr': []
+        }
+        
+        try:
+            # Method 1: pdfplumber (original method)
+            results['pdfplumber'] = self._extract_with_pdfplumber(pdf_path)
+            self.logger.info(f"pdfplumber extracted {len(results['pdfplumber'])} pages")
+            
+            # Method 2: PyMuPDF (fitz)
+            results['pymupdf'] = self._extract_with_pymupdf(pdf_path)
+            self.logger.info(f"PyMuPDF extracted {len(results['pymupdf'])} pages")
+            
+            # Method 3: Tesseract OCR
+            results['tesseract_ocr'] = self._extract_with_tesseract(pdf_path)
+            self.logger.info(f"Tesseract OCR extracted {len(results['tesseract_ocr'])} pages")
+            
+            # Method 4: EasyOCR (if available)
+            if self.easyocr_reader:
+                results['easyocr'] = self._extract_with_easyocr(pdf_path)
+                self.logger.info(f"EasyOCR extracted {len(results['easyocr'])} pages")
+            
+        except Exception as e:
+            self.logger.error(f"Error in multi-method extraction: {e}")
+        
+        return results
+    
+    def _extract_with_pdfplumber(self, pdf_path: str) -> List[str]:
+        """Extract text using pdfplumber"""
+        texts = []
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    texts.append(text or "")
+        except Exception as e:
+            self.logger.error(f"pdfplumber extraction failed: {e}")
+        return texts
+    
+    def _extract_with_pymupdf(self, pdf_path: str) -> List[str]:
+        """Extract text using PyMuPDF (fitz)"""
+        texts = []
+        try:
+            doc = fitz.open(pdf_path)
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                text = page.get_text()
+                texts.append(text)
+            doc.close()
+        except Exception as e:
+            self.logger.error(f"PyMuPDF extraction failed: {e}")
+        return texts
+    
+    def _extract_with_tesseract(self, pdf_path: str) -> List[str]:
+        """Extract text using Tesseract OCR"""
+        texts = []
+        try:
+            # Convert PDF to images
+            images = convert_from_path(pdf_path, dpi=300)
+            
+            for image in images:
+                # Convert PIL image to OpenCV format
+                img_array = np.array(image)
+                img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                
+                # Preprocess image for better OCR
+                gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+                # Apply threshold to get better contrast
+                _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                
+                # Use Tesseract OCR
+                text = pytesseract.image_to_string(thresh, config='--psm 6')
+                texts.append(text)
+                
+        except Exception as e:
+            self.logger.error(f"Tesseract OCR extraction failed: {e}")
+        return texts
+    
+    def _extract_with_easyocr(self, pdf_path: str) -> List[str]:
+        """Extract text using EasyOCR"""
+        texts = []
+        try:
+            if not self.easyocr_reader:
+                return texts
+                
+            # Convert PDF to images
+            images = convert_from_path(pdf_path, dpi=300)
+            
+            for image in images:
+                # Convert PIL image to numpy array
+                img_array = np.array(image)
+                
+                # Use EasyOCR
+                results = self.easyocr_reader.readtext(img_array)
+                
+                # Combine all detected text
+                page_text = " ".join([result[1] for result in results])
+                texts.append(page_text)
+                
+        except Exception as e:
+            self.logger.error(f"EasyOCR extraction failed: {e}")
+        return texts
+    
+    def get_best_text(self, results: Dict[str, List[str]]) -> List[str]:
+        """Choose the best text extraction method based on quality"""
+        best_texts = []
+        
+        for page_num in range(max(len(method_results) for method_results in results.values())):
+            page_texts = {}
+            
+            # Get text from each method for this page
+            for method, texts in results.items():
+                if page_num < len(texts):
+                    page_texts[method] = texts[page_num]
+            
+            # Choose the best text for this page
+            best_text = self._choose_best_page_text(page_texts)
+            best_texts.append(best_text)
+        
+        return best_texts
+    
+    def _choose_best_page_text(self, page_texts: Dict[str, str]) -> str:
+        """Choose the best text for a single page"""
+        if not page_texts:
+            return ""
+        
+        # Score each method based on text quality indicators
+        scores = {}
+        
+        for method, text in page_texts.items():
+            if not text or not text.strip():
+                scores[method] = 0
+                continue
+            
+            score = 0
+            
+            # Prefer text with more alphanumeric characters
+            alphanumeric_ratio = sum(c.isalnum() for c in text) / len(text) if text else 0
+            score += alphanumeric_ratio * 30
+            
+            # Prefer text with reasonable length (not too short, not too long)
+            text_length = len(text.strip())
+            if 50 <= text_length <= 5000:
+                score += 20
+            elif text_length > 5000:
+                score += 10  # Still good, but might be too verbose
+            
+            # Prefer text with common construction/architectural terms
+            construction_terms = ['FLOOR', 'ROOM', 'BEDROOM', 'BATHROOM', 'KITCHEN', 'LIVING', 'GARAGE', 'SQ', 'FT', 'DIMENSION']
+            term_count = sum(1 for term in construction_terms if term in text.upper())
+            score += term_count * 5
+            
+            # Penalize garbled text (lots of special characters)
+            special_char_ratio = sum(not c.isalnum() and not c.isspace() for c in text) / len(text) if text else 0
+            if special_char_ratio > 0.3:
+                score -= 20
+            
+            scores[method] = score
+        
+        # Return the text with the highest score
+        best_method = max(scores.keys(), key=lambda k: scores[k])
+        return page_texts[best_method]
+
 class HousePlanTakeoff:
     def __init__(self, pdf_path: str):
         self.pdf_path = Path(pdf_path)
@@ -152,9 +342,10 @@ class HousePlanTakeoff:
         self.extracted_data = {}
         self.material_estimates = {}
         self.logger = logging.getLogger(__name__)
+        self.pdf_extractor = EnhancedPDFExtractor()
         
     def extract_dimensions(self) -> Dict:
-        """Extract dimensions from the PDF text"""
+        """Extract dimensions from the PDF text using enhanced extraction methods"""
         dimensions = {
             'rooms': {},
             'total_sqft': 0,
@@ -208,82 +399,88 @@ class HousePlanTakeoff:
                 else:
                     dimensions['rooms_by_floor'][target_floor][room_key] = room_data
         
-        with pdfplumber.open(self.pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages):
-                text = page.extract_text()
-                if not text:
+        # Use enhanced PDF extraction
+        self.logger.info("Starting enhanced PDF text extraction...")
+        extraction_results = self.pdf_extractor.extract_text_multiple_methods(str(self.pdf_path))
+        best_texts = self.pdf_extractor.get_best_text(extraction_results)
+        
+        self.logger.info(f"Enhanced extraction completed. Processing {len(best_texts)} pages.")
+        
+        # Process each page with the best extracted text
+        for page_num, text in enumerate(best_texts):
+            if not text:
+                continue
+            
+            # Look for specific room patterns that we can extract from the PDF
+            # Try to find room labels followed by dimensions or areas
+            room_dimension_patterns = re.findall(r'([A-Z][A-Z\s]{2,15})\s+(\d+[\'\"]?\s*-\s*\d+[\'\"]?|\d+)\s*(?:SQ\.?\s*FT\.?|SQUARE\s*FEET?)?', text, re.IGNORECASE)
+            
+            # Process room dimension patterns to extract actual rooms
+            for room_name, dimension in room_dimension_patterns:
+                room_name_clean = room_name.strip()
+                # Skip obvious non-room text and garbled text
+                skip_words = ['CITY', 'HOUSTON', 'PROJECT', 'DESIGN', 'CUSTOM', 'HOME', 'REVIEWED', 'COMPLIANCE', 
+                             'RST FLOOR', 'OND FLOOR', 'TOTAL', 'BUILDING', 'HALL BE', 'SHALL BE', 'MAX OF',
+                             'TILED TO', 'COVERED', 'FLOOR LIVING']
+                if any(skip_word in room_name_clean.upper() for skip_word in skip_words):
                     continue
                 
-                # Look for specific room patterns that we can extract from the PDF
-                # Try to find room labels followed by dimensions or areas
-                room_dimension_patterns = re.findall(r'([A-Z][A-Z\s]{2,15})\s+(\d+[\'\"]?\s*-\s*\d+[\'\"]?|\d+)\s*(?:SQ\.?\s*FT\.?|SQUARE\s*FEET?)?', text, re.IGNORECASE)
+                # Skip garbled or incomplete room names
+                if len(room_name_clean) < 3 or 'BE ' in room_name_clean or 'TO ' in room_name_clean:
+                    continue
                 
-                # Process room dimension patterns to extract actual rooms
-                for room_name, dimension in room_dimension_patterns:
-                    room_name_clean = room_name.strip()
-                    # Skip obvious non-room text and garbled text
-                    skip_words = ['CITY', 'HOUSTON', 'PROJECT', 'DESIGN', 'CUSTOM', 'HOME', 'REVIEWED', 'COMPLIANCE', 
-                                 'RST FLOOR', 'OND FLOOR', 'TOTAL', 'BUILDING', 'HALL BE', 'SHALL BE', 'MAX OF',
-                                 'TILED TO', 'COVERED', 'FLOOR LIVING']
-                    if any(skip_word in room_name_clean.upper() for skip_word in skip_words):
-                        continue
-                    
-                    # Skip garbled or incomplete room names
-                    if len(room_name_clean) < 3 or 'BE ' in room_name_clean or 'TO ' in room_name_clean:
-                        continue
-                    
-                    # Try to extract area from dimension
-                    if dimension.isdigit():
-                        area_val = int(dimension)
-                        # Only process reasonable room sizes
-                        if 20 <= area_val <= 2000 and area_val not in found_areas:
-                            found_areas.add(area_val)
-                            
-                            # Map common room types
-                            room_type = self._map_room_type(room_name_clean)
-                            if room_type:
-                                add_room_to_floor(room_type, {
-                                    'name': room_name_clean,
-                                    'area': area_val
-                                }, current_floor)
-                                self.logger.info(f"Found room: {room_name_clean} = {area_val} sqft")
+                # Try to extract area from dimension
+                if dimension.isdigit():
+                    area_val = int(dimension)
+                    # Only process reasonable room sizes
+                    if 20 <= area_val <= 2000 and area_val not in found_areas:
+                        found_areas.add(area_val)
+                        
+                        # Map common room types
+                        room_type = self._map_room_type(room_name_clean)
+                        if room_type:
+                            add_room_to_floor(room_type, {
+                                'name': room_name_clean,
+                                'area': area_val
+                            }, current_floor)
+                            self.logger.info(f"Found room: {room_name_clean} = {area_val} sqft")
                 
-                # Also look for simple room name + number patterns
-                simple_room_patterns = re.findall(r'([A-Z][A-Z\s]{2,12})\s+(\d+)', text)
-                for room_name, number in simple_room_patterns:
-                    room_name_clean = room_name.strip()
-                    # Skip obvious non-room text and garbled text
-                    skip_words = ['CITY', 'HOUSTON', 'PROJECT', 'DESIGN', 'CUSTOM', 'HOME', 'REVIEWED', 'COMPLIANCE',
-                                 'RST FLOOR', 'OND FLOOR', 'TOTAL', 'BUILDING', 'HALL BE', 'SHALL BE', 'MAX OF',
-                                 'TILED TO', 'COVERED', 'FLOOR LIVING']
-                    if any(skip_word in room_name_clean.upper() for skip_word in skip_words):
-                        continue
-                    
-                    # Skip garbled or incomplete room names
-                    if len(room_name_clean) < 3 or 'BE ' in room_name_clean or 'TO ' in room_name_clean:
-                        continue
-                    
-                    if number.isdigit():
-                        area_val = int(number)
-                        # Only process reasonable room sizes
-                        if 20 <= area_val <= 2000 and area_val not in found_areas:
-                            found_areas.add(area_val)
-                            
-                            # Map common room types
-                            room_type = self._map_room_type(room_name_clean)
-                            if room_type:
-                                add_room_to_floor(room_type, {
-                                    'name': room_name_clean,
-                                    'area': area_val
-                                }, current_floor)
-                                self.logger.info(f"Found room: {room_name_clean} = {area_val} sqft")
+            # Also look for simple room name + number patterns
+            simple_room_patterns = re.findall(r'([A-Z][A-Z\s]{2,12})\s+(\d+)', text)
+            for room_name, number in simple_room_patterns:
+                room_name_clean = room_name.strip()
+                # Skip obvious non-room text and garbled text
+                skip_words = ['CITY', 'HOUSTON', 'PROJECT', 'DESIGN', 'CUSTOM', 'HOME', 'REVIEWED', 'COMPLIANCE',
+                             'RST FLOOR', 'OND FLOOR', 'TOTAL', 'BUILDING', 'HALL BE', 'SHALL BE', 'MAX OF',
+                             'TILED TO', 'COVERED', 'FLOOR LIVING']
+                if any(skip_word in room_name_clean.upper() for skip_word in skip_words):
+                    continue
                 
-                # Look for total square footage more aggressively
-                # Pattern from the PDF: "FIRST FLOOR LIVING 598" and "SECOND FLOOR LIVING 1000"
-                # IMPORTANT: These are FLOOR AREAS, not individual living rooms!
-                floor_patterns = re.findall(r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(?:LIVING|AREA)?\s*(\d+)', text, re.IGNORECASE)
-                total_floor_area = 0
-                for floor_name, area in floor_patterns:
+                # Skip garbled or incomplete room names
+                if len(room_name_clean) < 3 or 'BE ' in room_name_clean or 'TO ' in room_name_clean:
+                    continue
+                
+                if number.isdigit():
+                    area_val = int(number)
+                    # Only process reasonable room sizes
+                    if 20 <= area_val <= 2000 and area_val not in found_areas:
+                        found_areas.add(area_val)
+                        
+                        # Map common room types
+                        room_type = self._map_room_type(room_name_clean)
+                        if room_type:
+                            add_room_to_floor(room_type, {
+                                'name': room_name_clean,
+                                'area': area_val
+                            }, current_floor)
+                            self.logger.info(f"Found room: {room_name_clean} = {area_val} sqft")
+                
+            # Look for total square footage more aggressively
+            # Pattern from the PDF: "FIRST FLOOR LIVING 598" and "SECOND FLOOR LIVING 1000"
+            # IMPORTANT: These are FLOOR AREAS, not individual living rooms!
+            floor_patterns = re.findall(r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR\s+(?:LIVING|AREA)?\s*(\d+)', text, re.IGNORECASE)
+            total_floor_area = 0
+            for floor_name, area in floor_patterns:
                     floor_area = int(area)
                     # Only count as floor area if it's a reasonable size (100+ sqft)
                     if floor_area >= 100:
@@ -293,51 +490,51 @@ class HousePlanTakeoff:
                         current_floor = floor_key  # Update current floor context
                         self.logger.info(f"Found floor area: {floor_name} FLOOR = {floor_area} sqft - Setting floor context to {floor_key}")
                 
-                # Also detect floor context from page headers or titles
-                floor_context_patterns = re.findall(r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR', text, re.IGNORECASE)
-                if floor_context_patterns and current_floor == 'unknown':
-                    floor_name = floor_context_patterns[0].lower() + '_floor'
-                    current_floor = floor_name
-                    self.logger.info(f"Detected floor context from header: {floor_name}")
+            # Also detect floor context from page headers or titles
+            floor_context_patterns = re.findall(r'(FIRST|SECOND|THIRD|FOURTH)\s+FLOOR', text, re.IGNORECASE)
+            if floor_context_patterns and current_floor == 'unknown':
+                floor_name = floor_context_patterns[0].lower() + '_floor'
+                current_floor = floor_name
+                self.logger.info(f"Detected floor context from header: {floor_name}")
                 
-                if total_floor_area > 0:
-                    dimensions['total_sqft'] = total_floor_area
+            if total_floor_area > 0:
+                dimensions['total_sqft'] = total_floor_area
+            
+            # Look for "TOTAL COVERED" which includes all areas (living + garage + patios)
+            total_covered_patterns = re.findall(r'TOTAL\s+COVERED\s+(\d+)', text, re.IGNORECASE)
+            for total in total_covered_patterns:
+                total_val = int(total)
+                if total_val > dimensions['total_sqft']:
+                    dimensions['total_sqft'] = total_val
+            
+            # Also look for "TOTAL LIVING" as a fallback
+            total_living_patterns = re.findall(r'TOTAL\s+LIVING\s+(\d+)', text, re.IGNORECASE)
+            for total in total_living_patterns:
+                total_val = int(total)
+                if total_val > dimensions['total_sqft']:
+                    dimensions['total_sqft'] = total_val
+            
+            # Look for other TOTAL patterns but with lower priority
+            total_patterns = re.findall(r'TOTAL\s+(?!LIVING|COVERED)(\d+)', text, re.IGNORECASE)
+            for total in total_patterns:
+                total_val = int(total)
+                # Only use this if we don't have a good total yet
+                if dimensions['total_sqft'] < 1000 and total_val > dimensions['total_sqft']:
+                    dimensions['total_sqft'] = total_val
                 
-                # Look for "TOTAL COVERED" which includes all areas (living + garage + patios)
-                total_covered_patterns = re.findall(r'TOTAL\s+COVERED\s+(\d+)', text, re.IGNORECASE)
-                for total in total_covered_patterns:
-                    total_val = int(total)
-                    if total_val > dimensions['total_sqft']:
-                        dimensions['total_sqft'] = total_val
-                
-                # Also look for "TOTAL LIVING" as a fallback
-                total_living_patterns = re.findall(r'TOTAL\s+LIVING\s+(\d+)', text, re.IGNORECASE)
-                for total in total_living_patterns:
-                    total_val = int(total)
-                    if total_val > dimensions['total_sqft']:
-                        dimensions['total_sqft'] = total_val
-                
-                # Look for other TOTAL patterns but with lower priority
-                total_patterns = re.findall(r'TOTAL\s+(?!LIVING|COVERED)(\d+)', text, re.IGNORECASE)
-                for total in total_patterns:
-                    total_val = int(total)
-                    # Only use this if we don't have a good total yet
-                    if dimensions['total_sqft'] < 1000 and total_val > dimensions['total_sqft']:
-                        dimensions['total_sqft'] = total_val
-                
-                # Extract room dimensions (looking for patterns like "10' - 0" x 12' - 6"")
-                room_patterns = re.findall(r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)', text)
-                for pattern in room_patterns:
-                    width, length = pattern
-                    # Convert to feet for calculation
-                    width_ft = self._convert_to_feet(width)
-                    length_ft = self._convert_to_feet(length)
-                    area = width_ft * length_ft
-                    dimensions['rooms'][f'room_{len(dimensions["rooms"])}'] = {
-                        'width': width_ft,
-                        'length': length_ft,
-                        'area': area
-                    }
+            # Extract room dimensions (looking for patterns like "10' - 0" x 12' - 6"")
+            room_patterns = re.findall(r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)', text)
+            for pattern in room_patterns:
+                width, length = pattern
+                # Convert to feet for calculation
+                width_ft = self._convert_to_feet(width)
+                length_ft = self._convert_to_feet(length)
+                area = width_ft * length_ft
+                dimensions['rooms'][f'room_{len(dimensions["rooms"])}'] = {
+                    'width': width_ft,
+                    'length': length_ft,
+                    'area': area
+                }
                 
                 # Look for square footage patterns (but don't override if we already have a good total)
                 sqft_patterns = re.findall(r'(\d+)\s*(?:SQ\.?\s*FT\.?|SQUARE\s*FEET?)', text, re.IGNORECASE)
