@@ -180,6 +180,138 @@ class TesseractTakeoffExtractor:
             },
             'ceiling_heights': [],
             'wall_lengths': [],
+            'structural_details': {
+                'foundation': {
+                    'type': None,
+                    'area_sqft': 0,
+                    'thickness': None,
+                    'details': []
+                },
+                'roof': {
+                    'type': None,
+                    'pitch': None,
+                    'area_sqft': 0,
+                    'material': None,
+                    'details': []
+                },
+                'beams': {
+                    'sizes': [],
+                    'count': 0,
+                    'details': []
+                },
+                'joists': {
+                    'size': None,
+                    'spacing': None,
+                    'count': 0,
+                    'details': []
+                },
+                'framing': {
+                    'stud_size': None,
+                    'stud_spacing': None,
+                    'details': []
+                }
+            },
+            'system_details': {
+                'hvac': {
+                    'equipment': {
+                        'type': None,
+                        'capacity': None,
+                        'efficiency': None,
+                        'details': []
+                    },
+                    'ductwork': {
+                        'material': None,
+                        'sizes': [],
+                        'linear_feet': 0,
+                        'details': []
+                    },
+                    'ventilation': {
+                        'exhaust_fans': 0,
+                        'fresh_air_intake': None,
+                        'details': []
+                    }
+                },
+                'plumbing': {
+                    'water_heater': {
+                        'type': None,
+                        'capacity': None,
+                        'fuel_type': None,
+                        'details': []
+                    },
+                    'pipes': {
+                        'water_supply': None,
+                        'drain_waste_vent': None,
+                        'sizes': [],
+                        'details': []
+                    },
+                    'fixtures': {
+                        'toilets': 0,
+                        'sinks': 0,
+                        'tubs': 0,
+                        'showers': 0,
+                        'details': []
+                    }
+                },
+                'electrical': {
+                    'main_panel': {
+                        'size': None,
+                        'amperage': None,
+                        'circuits': 0,
+                        'details': []
+                    },
+                    'wire': {
+                        'gauge': None,
+                        'type': None,
+                        'linear_feet': 0,
+                        'details': []
+                    },
+                    'outlets': {
+                        'standard': 0,
+                        'gfci': 0,
+                        'dedicated': 0,
+                        'details': []
+                    }
+                }
+            },
+            'material_specifications': {
+                'insulation': {
+                    'wall_r_value': None,
+                    'ceiling_r_value': None,
+                    'floor_r_value': None,
+                    'type': None,
+                    'details': []
+                },
+                'siding': {
+                    'type': None,
+                    'material': None,
+                    'area_sqft': 0,
+                    'details': []
+                },
+                'flooring': {
+                    'types': [],
+                    'areas': {},
+                    'details': []
+                },
+                'interior_finishes': {
+                    'drywall': {
+                        'thickness': None,
+                        'area_sqft': 0,
+                        'details': []
+                    },
+                    'paint': {
+                        'primer': None,
+                        'finish': None,
+                        'area_sqft': 0,
+                        'details': []
+                    },
+                    'trim': {
+                        'baseboard': 0,
+                        'crown_molding': 0,
+                        'casing': 0,
+                        'details': []
+                    }
+                }
+            },
             'raw_text': full_text
         }
         
@@ -196,6 +328,18 @@ class TesseractTakeoffExtractor:
         
         # Add default ceiling heights if none found (CRITICAL for material estimates)
         self._add_default_ceiling_heights(construction_data)
+        
+        # Calculate wall areas (CRITICAL for material estimates)
+        self._calculate_wall_areas(construction_data)
+        
+        # Extract structural details (foundation, roof, beams, joists)
+        self._extract_structural_details(full_text, construction_data)
+        
+        # Extract system details (HVAC, plumbing, electrical)
+        self._extract_system_details(full_text, construction_data)
+        
+        # Extract material specifications
+        self._extract_material_specifications(full_text, construction_data)
         
         return construction_data
     
@@ -907,6 +1051,900 @@ class TesseractTakeoffExtractor:
         
         self.logger.info(f"Calculated wall areas: {total_wall_area:.0f} sqft total ({first_floor_wall_area:.0f} first floor, {second_floor_wall_area:.0f} second floor)")
     
+    def _extract_structural_details(self, text: str, data: Dict):
+        """Extract structural details including foundation, roof, beams, and joists"""
+        self.logger.info("Extracting structural details...")
+        
+        # Extract foundation details
+        self._extract_foundation_details(text, data)
+        
+        # Extract roof details
+        self._extract_roof_details(text, data)
+        
+        # Extract beam and joist details
+        self._extract_beam_joist_details(text, data)
+        
+        # Extract framing details
+        self._extract_framing_details(text, data)
+        
+        # Log structural summary
+        self._log_structural_summary(data)
+    
+    def _extract_foundation_details(self, text: str, data: Dict):
+        """Extract foundation type, size, and specifications"""
+        foundation = data['structural_details']['foundation']
+        
+        # Foundation type patterns
+        foundation_types = [
+            r'(?:SLAB\s+FOUNDATION|CONCRETE\s+SLAB|SLAB\s+ON\s+GRADE)',
+            r'(?:CRAWL\s+SPACE|CRAWLSPACE)',
+            r'(?:BASEMENT|FULL\s+BASEMENT)',
+            r'(?:PIER\s+AND\s+BEAM|PIER\s+BEAM)',
+            r'(?:STEM\s+WALL|FOUNDATION\s+WALL)'
+        ]
+        
+        for pattern in foundation_types:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                foundation['type'] = matches[0].upper()
+                foundation['details'].append(f"Foundation type: {matches[0]}")
+                self.logger.info(f"Found foundation type: {matches[0]}")
+                break
+        
+        # Foundation thickness patterns
+        thickness_patterns = [
+            r'FOUNDATION\s+THICKNESS[:\s]*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)',
+            r'SLAB\s+THICKNESS[:\s]*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)',
+            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*THICK\s+(?:FOUNDATION|SLAB)',
+            r'(\d+[\'\"]?)\s*THICK\s+(?:FOUNDATION|SLAB)'
+        ]
+        
+        for pattern in thickness_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                thickness = matches[0]
+                foundation['thickness'] = thickness
+                foundation['details'].append(f"Foundation thickness: {thickness}")
+                self.logger.info(f"Found foundation thickness: {thickness}")
+                break
+        
+        # Foundation area (if not already calculated, use total sqft)
+        if not foundation['area_sqft'] and data['total_sqft']:
+            foundation['area_sqft'] = data['total_sqft']
+            foundation['details'].append(f"Foundation area: {data['total_sqft']} sqft")
+    
+    def _extract_roof_details(self, text: str, data: Dict):
+        """Extract roof type, pitch, material, and area"""
+        roof = data['structural_details']['roof']
+        
+        # Roof type patterns
+        roof_types = [
+            r'(?:GABLE\s+ROOF|GABLE)',
+            r'(?:HIP\s+ROOF|HIP)',
+            r'(?:SHED\s+ROOF|SHED)',
+            r'(?:MANSARD\s+ROOF|MANSARD)',
+            r'(?:GAMBREL\s+ROOF|GAMBREL)',
+            r'(?:FLAT\s+ROOF|FLAT)'
+        ]
+        
+        for pattern in roof_types:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                roof['type'] = matches[0].upper()
+                roof['details'].append(f"Roof type: {matches[0]}")
+                self.logger.info(f"Found roof type: {matches[0]}")
+                break
+        
+        # Roof pitch patterns
+        pitch_patterns = [
+            r'ROOF\s+PITCH[:\s]*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)',
+            r'PITCH[:\s]*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)',
+            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*PITCH',
+            r'(\d+:\d+)\s*PITCH',
+            r'(\d+/\d+)\s*PITCH'
+        ]
+        
+        for pattern in pitch_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                pitch = matches[0]
+                roof['pitch'] = pitch
+                roof['details'].append(f"Roof pitch: {pitch}")
+                self.logger.info(f"Found roof pitch: {pitch}")
+                break
+        
+        # Roof material patterns
+        roof_materials = [
+            r'(?:COMPOSITION\s+SHINGLES|COMP\s+SHINGLES|ASPHALT\s+SHINGLES)',
+            r'(?:METAL\s+ROOFING|METAL\s+ROOF)',
+            r'(?:TILE\s+ROOF|CLAY\s+TILE|CONCRETE\s+TILE)',
+            r'(?:WOOD\s+SHINGLES|CEDAR\s+SHINGLES)',
+            r'(?:SLATE\s+ROOF|SLATE)',
+            r'(?:EPDM\s+ROOFING|RUBBER\s+ROOF)'
+        ]
+        
+        for pattern in roof_materials:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                roof['material'] = matches[0].upper()
+                roof['details'].append(f"Roof material: {matches[0]}")
+                self.logger.info(f"Found roof material: {matches[0]}")
+                break
+        
+        # Calculate roof area (typically 1.1-1.3x floor area for pitched roofs)
+        if data['total_sqft'] and not roof['area_sqft']:
+            # Estimate roof area based on pitch and overhangs
+            roof_multiplier = 1.2  # Default for typical residential roof
+            if roof['pitch']:
+                # Higher pitch = more roof area
+                if '12' in str(roof['pitch']) or '6' in str(roof['pitch']):
+                    roof_multiplier = 1.3
+                elif '4' in str(roof['pitch']) or '3' in str(roof['pitch']):
+                    roof_multiplier = 1.15
+            
+            roof['area_sqft'] = int(data['total_sqft'] * roof_multiplier)
+            roof['details'].append(f"Estimated roof area: {roof['area_sqft']} sqft")
+    
+    def _extract_beam_joist_details(self, text: str, data: Dict):
+        """Extract beam sizes, joist specifications, and structural elements"""
+        beams = data['structural_details']['beams']
+        joists = data['structural_details']['joists']
+        
+        # Beam size patterns
+        beam_patterns = [
+            r'(\d+x\d+)\s*(?:BEAM|GLULAM|LVL)',
+            r'(?:BEAM|GLULAM|LVL)\s*(\d+x\d+)',
+            r'(\d+x\d+)\s*(?:HEADER|GIRDER)',
+            r'(?:HEADER|GIRDER)\s*(\d+x\d+)',
+            r'(\d+x\d+)\s*(?:LUMBER|WOOD)'
+        ]
+        
+        for pattern in beam_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in matches:
+                if match not in beams['sizes']:
+                    beams['sizes'].append(match)
+                    beams['details'].append(f"Beam size: {match}")
+                    self.logger.info(f"Found beam size: {match}")
+        
+        # Joist size and spacing patterns
+        joist_patterns = [
+            r'(\d+x\d+)\s*(?:JOIST|FLOOR\s+JOIST)',
+            r'(?:JOIST|FLOOR\s+JOIST)\s*(\d+x\d+)',
+            r'(\d+[\'\"]?)\s*O\.?C\.?\s*(?:JOIST|SPACING)',
+            r'(?:JOIST|SPACING)\s*(\d+[\'\"]?)\s*O\.?C\.?'
+        ]
+        
+        for pattern in joist_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in matches:
+                if 'x' in match:  # Size pattern
+                    joists['size'] = match
+                    joists['details'].append(f"Joist size: {match}")
+                    self.logger.info(f"Found joist size: {match}")
+                else:  # Spacing pattern
+                    joists['spacing'] = match
+                    joists['details'].append(f"Joist spacing: {match}")
+                    self.logger.info(f"Found joist spacing: {match}")
+        
+        # Estimate joist count based on floor area and spacing
+        if data['total_sqft'] and joists['spacing']:
+            try:
+                spacing = float(re.findall(r'\d+', joists['spacing'])[0])
+                # Estimate joist count: floor width / spacing
+                estimated_floor_width = (data['total_sqft'] ** 0.5) * 0.8  # Assume roughly square
+                joist_count = int(estimated_floor_width / spacing)
+                joists['count'] = joist_count
+                joists['details'].append(f"Estimated joist count: {joist_count}")
+            except (ValueError, IndexError):
+                pass
+    
+    def _extract_framing_details(self, text: str, data: Dict):
+        """Extract framing specifications including stud size and spacing"""
+        framing = data['structural_details']['framing']
+        
+        # Stud size patterns
+        stud_patterns = [
+            r'(\d+x\d+)\s*(?:STUD|WALL\s+STUD)',
+            r'(?:STUD|WALL\s+STUD)\s*(\d+x\d+)',
+            r'(\d+x\d+)\s*(?:FRAMING|WALL\s+FRAMING)'
+        ]
+        
+        for pattern in stud_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                framing['stud_size'] = matches[0]
+                framing['details'].append(f"Stud size: {matches[0]}")
+                self.logger.info(f"Found stud size: {matches[0]}")
+                break
+        
+        # Stud spacing patterns
+        spacing_patterns = [
+            r'(\d+[\'\"]?)\s*O\.?C\.?\s*(?:STUD|SPACING)',
+            r'(?:STUD|SPACING)\s*(\d+[\'\"]?)\s*O\.?C\.?',
+            r'(\d+[\'\"]?)\s*ON\s+CENTER'
+        ]
+        
+        for pattern in spacing_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                framing['stud_spacing'] = matches[0]
+                framing['details'].append(f"Stud spacing: {matches[0]}")
+                self.logger.info(f"Found stud spacing: {matches[0]}")
+                break
+        
+        # Default values if not found
+        if not framing['stud_size']:
+            framing['stud_size'] = '2x4'
+            framing['details'].append("Default stud size: 2x4")
+        
+        if not framing['stud_spacing']:
+            framing['stud_spacing'] = '16"'
+            framing['details'].append("Default stud spacing: 16\" O.C.")
+    
+    def _log_structural_summary(self, data: Dict):
+        """Log a summary of extracted structural details"""
+        structural = data['structural_details']
+        
+        self.logger.info("=== STRUCTURAL DETAILS SUMMARY ===")
+        
+        # Foundation summary
+        if structural['foundation']['type']:
+            self.logger.info(f"Foundation: {structural['foundation']['type']}")
+            if structural['foundation']['thickness']:
+                self.logger.info(f"  Thickness: {structural['foundation']['thickness']}")
+            if structural['foundation']['area_sqft']:
+                self.logger.info(f"  Area: {structural['foundation']['area_sqft']} sqft")
+        
+        # Roof summary
+        if structural['roof']['type']:
+            self.logger.info(f"Roof: {structural['roof']['type']}")
+            if structural['roof']['pitch']:
+                self.logger.info(f"  Pitch: {structural['roof']['pitch']}")
+            if structural['roof']['material']:
+                self.logger.info(f"  Material: {structural['roof']['material']}")
+            if structural['roof']['area_sqft']:
+                self.logger.info(f"  Area: {structural['roof']['area_sqft']} sqft")
+        
+        # Beams summary
+        if structural['beams']['sizes']:
+            self.logger.info(f"Beams: {', '.join(structural['beams']['sizes'])}")
+        
+        # Joists summary
+        if structural['joists']['size']:
+            self.logger.info(f"Joists: {structural['joists']['size']}")
+            if structural['joists']['spacing']:
+                self.logger.info(f"  Spacing: {structural['joists']['spacing']}")
+            if structural['joists']['count']:
+                self.logger.info(f"  Count: {structural['joists']['count']}")
+        
+        # Framing summary
+        if structural['framing']['stud_size']:
+            self.logger.info(f"Framing: {structural['framing']['stud_size']} studs")
+            if structural['framing']['stud_spacing']:
+                self.logger.info(f"  Spacing: {structural['framing']['stud_spacing']}")
+        
+        self.logger.info("=== END STRUCTURAL SUMMARY ===")
+    
+    def _extract_system_details(self, text: str, data: Dict):
+        """Extract system details including HVAC, plumbing, and electrical"""
+        self.logger.info("Extracting system details...")
+        
+        # Extract HVAC details
+        self._extract_hvac_details(text, data)
+        
+        # Extract plumbing details
+        self._extract_plumbing_details(text, data)
+        
+        # Extract electrical details
+        self._extract_electrical_details(text, data)
+        
+        # Log system summary
+        self._log_system_summary(data)
+    
+    def _extract_hvac_details(self, text: str, data: Dict):
+        """Extract HVAC system details"""
+        hvac = data['system_details']['hvac']
+        
+        # HVAC equipment type patterns
+        hvac_types = [
+            r'(?:HEAT\s+PUMP|HEAT\s+PUMP\s+SYSTEM)',
+            r'(?:FURNACE|GAS\s+FURNACE|ELECTRIC\s+FURNACE)',
+            r'(?:AIR\s+CONDITIONER|A/C|AC\s+UNIT)',
+            r'(?:PACKAGE\s+UNIT|PACKAGED\s+UNIT)',
+            r'(?:SPLIT\s+SYSTEM|SPLIT\s+UNIT)',
+            r'(?:MINI\s+SPLIT|DUCTLESS)'
+        ]
+        
+        for pattern in hvac_types:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                hvac['equipment']['type'] = matches[0].upper()
+                hvac['equipment']['details'].append(f"HVAC type: {matches[0]}")
+                self.logger.info(f"Found HVAC type: {matches[0]}")
+                break
+        
+        # HVAC capacity patterns (tons, BTUs)
+        capacity_patterns = [
+            r'(\d+(?:\.\d+)?)\s*TON',
+            r'(\d+)\s*BTU',
+            r'(\d+)\s*MBH',
+            r'(\d+(?:\.\d+)?)\s*TON\s*AC',
+            r'(\d+)\s*BTU\s*COOLING'
+        ]
+        
+        for pattern in capacity_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                capacity = matches[0]
+                hvac['equipment']['capacity'] = capacity
+                hvac['equipment']['details'].append(f"HVAC capacity: {capacity}")
+                self.logger.info(f"Found HVAC capacity: {capacity}")
+                break
+        
+        # HVAC efficiency patterns (SEER, AFUE, HSPF)
+        efficiency_patterns = [
+            r'SEER\s*(\d+(?:\.\d+)?)',
+            r'AFUE\s*(\d+(?:\.\d+)?)',
+            r'HSPF\s*(\d+(?:\.\d+)?)',
+            r'(\d+(?:\.\d+)?)\s*SEER',
+            r'(\d+(?:\.\d+)?)\s*AFUE'
+        ]
+        
+        for pattern in efficiency_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                efficiency = matches[0]
+                hvac['equipment']['efficiency'] = efficiency
+                hvac['equipment']['details'].append(f"HVAC efficiency: {efficiency}")
+                self.logger.info(f"Found HVAC efficiency: {efficiency}")
+                break
+        
+        # Ductwork material patterns
+        duct_materials = [
+            r'(?:GALVANIZED\s+STEEL|GALV\s+STEEL)',
+            r'(?:FLEXIBLE\s+DUCT|FLEX\s+DUCT)',
+            r'(?:FIBERGLASS\s+DUCT|FIBERGLASS)',
+            r'(?:SHEET\s+METAL|METAL\s+DUCT)',
+            r'(?:RIGID\s+DUCT|RIGID)'
+        ]
+        
+        for pattern in duct_materials:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                hvac['ductwork']['material'] = matches[0].upper()
+                hvac['ductwork']['details'].append(f"Ductwork material: {matches[0]}")
+                self.logger.info(f"Found ductwork material: {matches[0]}")
+                break
+        
+        # Ductwork sizes
+        duct_sizes = re.findall(r'(\d+[\'\"]?)\s*(?:X|x)\s*(\d+[\'\"]?)\s*(?:DUCT|DIA)', text, re.IGNORECASE)
+        for size in duct_sizes:
+            size_str = f"{size[0]} x {size[1]}"
+            if size_str not in hvac['ductwork']['sizes']:
+                hvac['ductwork']['sizes'].append(size_str)
+                hvac['ductwork']['details'].append(f"Ductwork size: {size_str}")
+                self.logger.info(f"Found ductwork size: {size_str}")
+        
+        # Estimate ductwork linear feet based on house size
+        if data['total_sqft'] and not hvac['ductwork']['linear_feet']:
+            # Typical residential: 1-2 linear feet per sqft
+            estimated_ductwork = int(data['total_sqft'] * 1.5)
+            hvac['ductwork']['linear_feet'] = estimated_ductwork
+            hvac['ductwork']['details'].append(f"Estimated ductwork: {estimated_ductwork} linear feet")
+        
+        # Exhaust fans
+        exhaust_fan_patterns = [
+            r'(\d+)\s*(?:EXHAUST\s+FAN|BATH\s+FAN|VENT\s+FAN)',
+            r'(?:EXHAUST\s+FAN|BATH\s+FAN|VENT\s+FAN).*?(\d+)',
+            r'(\d+)\s*CFM\s*(?:EXHAUST|FAN)'
+        ]
+        
+        for pattern in exhaust_fan_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                try:
+                    fan_count = int(matches[0])
+                    hvac['ventilation']['exhaust_fans'] = fan_count
+                    hvac['ventilation']['details'].append(f"Exhaust fans: {fan_count}")
+                    self.logger.info(f"Found exhaust fans: {fan_count}")
+                    break
+                except ValueError:
+                    continue
+    
+    def _extract_plumbing_details(self, text: str, data: Dict):
+        """Extract plumbing system details"""
+        plumbing = data['system_details']['plumbing']
+        
+        # Water heater type patterns
+        water_heater_types = [
+            r'(?:ELECTRIC\s+WATER\s+HEATER|ELECTRIC\s+WH)',
+            r'(?:GAS\s+WATER\s+HEATER|GAS\s+WH)',
+            r'(?:TANKLESS\s+WATER\s+HEATER|TANKLESS)',
+            r'(?:HEAT\s+PUMP\s+WATER\s+HEATER|HPWH)',
+            r'(?:SOLAR\s+WATER\s+HEATER|SOLAR\s+WH)'
+        ]
+        
+        for pattern in water_heater_types:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                plumbing['water_heater']['type'] = matches[0].upper()
+                plumbing['water_heater']['details'].append(f"Water heater type: {matches[0]}")
+                self.logger.info(f"Found water heater type: {matches[0]}")
+                break
+        
+        # Water heater capacity patterns
+        capacity_patterns = [
+            r'(\d+)\s*GAL\s*(?:WATER\s+HEATER|WH)',
+            r'(\d+)\s*GALLON\s*(?:WATER\s+HEATER|WH)',
+            r'(\d+)\s*GAL',
+            r'(\d+)\s*GALLON'
+        ]
+        
+        for pattern in capacity_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                capacity = matches[0]
+                plumbing['water_heater']['capacity'] = capacity
+                plumbing['water_heater']['details'].append(f"Water heater capacity: {capacity} gallons")
+                self.logger.info(f"Found water heater capacity: {capacity} gallons")
+                break
+        
+        # Water heater fuel type
+        fuel_types = [
+            r'(?:NATURAL\s+GAS|GAS)',
+            r'(?:ELECTRIC|ELECTRICAL)',
+            r'(?:PROPANE|LP\s+GAS)',
+            r'(?:SOLAR|SOLAR\s+ASSISTED)'
+        ]
+        
+        for pattern in fuel_types:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                plumbing['water_heater']['fuel_type'] = matches[0].upper()
+                plumbing['water_heater']['details'].append(f"Water heater fuel: {matches[0]}")
+                self.logger.info(f"Found water heater fuel: {matches[0]}")
+                break
+        
+        # Pipe material patterns
+        pipe_materials = [
+            r'(?:COPPER\s+PIPE|COPPER)',
+            r'(?:PEX\s+PIPE|PEX)',
+            r'(?:CPVC\s+PIPE|CPVC)',
+            r'(?:PVC\s+PIPE|PVC)',
+            r'(?:GALVANIZED\s+PIPE|GALV\s+PIPE)',
+            r'(?:CAST\s+IRON\s+PIPE|CAST\s+IRON)'
+        ]
+        
+        for pattern in pipe_materials:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                material = matches[0].upper()
+                if 'COPPER' in material:
+                    plumbing['pipes']['water_supply'] = material
+                elif 'PVC' in material or 'CAST IRON' in material:
+                    plumbing['pipes']['drain_waste_vent'] = material
+                plumbing['pipes']['details'].append(f"Pipe material: {material}")
+                self.logger.info(f"Found pipe material: {material}")
+        
+        # Pipe sizes
+        pipe_sizes = re.findall(r'(\d+(?:/\d+)?)\s*(?:INCH|IN|[\'\"])\s*(?:PIPE|DIA)', text, re.IGNORECASE)
+        for size in pipe_sizes:
+            if size not in plumbing['pipes']['sizes']:
+                plumbing['pipes']['sizes'].append(size)
+                plumbing['pipes']['details'].append(f"Pipe size: {size}\"")
+                self.logger.info(f"Found pipe size: {size}\"")
+        
+        # Plumbing fixtures (more detailed than basic fixture count)
+        fixture_patterns = [
+            r'(\d+)\s*(?:TOILET|WC|W\.C\.)',
+            r'(\d+)\s*(?:SINK|LAVATORY|LAV)',
+            r'(\d+)\s*(?:TUB|BATHTUB)',
+            r'(\d+)\s*(?:SHOWER|SHOWER\s+STALL)',
+            r'(\d+)\s*(?:FAUCET|FAUCETS)'
+        ]
+        
+        for pattern in fixture_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                count = int(matches[0])
+                if 'TOILET' in pattern or 'WC' in pattern:
+                    plumbing['fixtures']['toilets'] = count
+                elif 'SINK' in pattern or 'LAV' in pattern:
+                    plumbing['fixtures']['sinks'] = count
+                elif 'TUB' in pattern:
+                    plumbing['fixtures']['tubs'] = count
+                elif 'SHOWER' in pattern:
+                    plumbing['fixtures']['showers'] = count
+                plumbing['fixtures']['details'].append(f"Found {count} fixtures")
+                self.logger.info(f"Found {count} fixtures")
+    
+    def _extract_electrical_details(self, text: str, data: Dict):
+        """Extract electrical system details"""
+        electrical = data['system_details']['electrical']
+        
+        # Main panel size patterns
+        panel_patterns = [
+            r'(\d+)\s*AMP\s*(?:MAIN\s+)?(?:PANEL|SERVICE)',
+            r'(\d+)\s*A\s*(?:MAIN\s+)?(?:PANEL|SERVICE)',
+            r'(\d+)\s*AMP\s*ELECTRICAL',
+            r'(\d+)\s*A\s*ELECTRICAL'
+        ]
+        
+        for pattern in panel_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                amperage = matches[0]
+                electrical['main_panel']['amperage'] = amperage
+                electrical['main_panel']['details'].append(f"Main panel: {amperage} amp")
+                self.logger.info(f"Found main panel: {amperage} amp")
+                break
+        
+        # Panel size (spaces/circuits)
+        panel_size_patterns = [
+            r'(\d+)\s*(?:SPACE|CIRCUIT)\s*(?:PANEL|BOX)',
+            r'(\d+)\s*(?:SPACE|CIRCUIT)',
+            r'(\d+)\s*SLOT\s*(?:PANEL|BOX)'
+        ]
+        
+        for pattern in panel_size_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                size = matches[0]
+                electrical['main_panel']['size'] = size
+                electrical['main_panel']['details'].append(f"Panel size: {size} spaces")
+                self.logger.info(f"Found panel size: {size} spaces")
+                break
+        
+        # Wire gauge patterns
+        wire_gauge_patterns = [
+            r'(\d+)\s*AWG\s*(?:WIRE|CABLE)',
+            r'(\d+)\s*GAUGE\s*(?:WIRE|CABLE)',
+            r'(\d+)\s*GA\s*(?:WIRE|CABLE)',
+            r'#(\d+)\s*(?:WIRE|CABLE)'
+        ]
+        
+        for pattern in wire_gauge_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                gauge = matches[0]
+                electrical['wire']['gauge'] = gauge
+                electrical['wire']['details'].append(f"Wire gauge: {gauge} AWG")
+                self.logger.info(f"Found wire gauge: {gauge} AWG")
+                break
+        
+        # Wire type patterns
+        wire_types = [
+            r'(?:THWN\s+WIRE|THWN)',
+            r'(?:THHN\s+WIRE|THHN)',
+            r'(?:NM\s+CABLE|ROMEX)',
+            r'(?:UF\s+CABLE|UF)',
+            r'(?:COPPER\s+WIRE|COPPER)',
+            r'(?:ALUMINUM\s+WIRE|ALUMINUM)'
+        ]
+        
+        for pattern in wire_types:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                wire_type = matches[0].upper()
+                electrical['wire']['type'] = wire_type
+                electrical['wire']['details'].append(f"Wire type: {wire_type}")
+                self.logger.info(f"Found wire type: {wire_type}")
+                break
+        
+        # Estimate wire linear feet based on house size
+        if data['total_sqft'] and not electrical['wire']['linear_feet']:
+            # Typical residential: 1.5-2 linear feet per sqft
+            estimated_wire = int(data['total_sqft'] * 1.5)
+            electrical['wire']['linear_feet'] = estimated_wire
+            electrical['wire']['details'].append(f"Estimated wire: {estimated_wire} linear feet")
+        
+        # Outlet types (more detailed than basic fixture count)
+        outlet_patterns = [
+            r'(\d+)\s*(?:GFCI\s+OUTLET|GFCI)',
+            r'(\d+)\s*(?:DEDICATED\s+OUTLET|DEDICATED)',
+            r'(\d+)\s*(?:STANDARD\s+OUTLET|STANDARD)',
+            r'(\d+)\s*(?:RECEPTACLE|RECEPTACLES)'
+        ]
+        
+        for pattern in outlet_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                count = int(matches[0])
+                if 'GFCI' in pattern:
+                    electrical['outlets']['gfci'] = count
+                elif 'DEDICATED' in pattern:
+                    electrical['outlets']['dedicated'] = count
+                else:
+                    electrical['outlets']['standard'] = count
+                electrical['outlets']['details'].append(f"Found {count} outlets")
+                self.logger.info(f"Found {count} outlets")
+    
+    def _extract_material_specifications(self, text: str, data: Dict):
+        """Extract material specifications including insulation, siding, flooring, and finishes"""
+        self.logger.info("Extracting material specifications...")
+        
+        # Extract insulation details
+        self._extract_insulation_details(text, data)
+        
+        # Extract siding details
+        self._extract_siding_details(text, data)
+        
+        # Extract flooring details
+        self._extract_flooring_details(text, data)
+        
+        # Extract interior finish details
+        self._extract_interior_finish_details(text, data)
+        
+        # Log material summary
+        self._log_material_summary(data)
+    
+    def _extract_insulation_details(self, text: str, data: Dict):
+        """Extract insulation specifications"""
+        insulation = data['material_specifications']['insulation']
+        
+        # R-value patterns
+        r_value_patterns = [
+            r'R-(\d+(?:\.\d+)?)\s*(?:WALL|WALLS)',
+            r'R(\d+(?:\.\d+)?)\s*(?:WALL|WALLS)',
+            r'(\d+(?:\.\d+)?)\s*R-VALUE\s*(?:WALL|WALLS)',
+            r'WALL\s*R-(\d+(?:\.\d+)?)',
+            r'WALL\s*R(\d+(?:\.\d+)?)'
+        ]
+        
+        for pattern in r_value_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                r_value = matches[0]
+                insulation['wall_r_value'] = r_value
+                insulation['details'].append(f"Wall R-value: R-{r_value}")
+                self.logger.info(f"Found wall R-value: R-{r_value}")
+                break
+        
+        # Ceiling R-value patterns
+        ceiling_r_patterns = [
+            r'R-(\d+(?:\.\d+)?)\s*(?:CEILING|CEILINGS|ATTIC)',
+            r'R(\d+(?:\.\d+)?)\s*(?:CEILING|CEILINGS|ATTIC)',
+            r'(\d+(?:\.\d+)?)\s*R-VALUE\s*(?:CEILING|CEILINGS|ATTIC)',
+            r'CEILING\s*R-(\d+(?:\.\d+)?)',
+            r'ATTIC\s*R-(\d+(?:\.\d+)?)'
+        ]
+        
+        for pattern in ceiling_r_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                r_value = matches[0]
+                insulation['ceiling_r_value'] = r_value
+                insulation['details'].append(f"Ceiling R-value: R-{r_value}")
+                self.logger.info(f"Found ceiling R-value: R-{r_value}")
+                break
+        
+        # Insulation type patterns
+        insulation_types = [
+            r'(?:FIBERGLASS\s+BATT|FIBERGLASS)',
+            r'(?:CELLULOSE\s+INSULATION|CELLULOSE)',
+            r'(?:SPRAY\s+FOAM|SPRAY\s+INSULATION)',
+            r'(?:BLOWN\s+IN\s+INSULATION|BLOWN\s+IN)',
+            r'(?:RIGID\s+FOAM|RIGID\s+INSULATION)',
+            r'(?:MINERAL\s+WOOL|ROCK\s+WOOL)'
+        ]
+        
+        for pattern in insulation_types:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                insulation['type'] = matches[0].upper()
+                insulation['details'].append(f"Insulation type: {matches[0]}")
+                self.logger.info(f"Found insulation type: {matches[0]}")
+                break
+    
+    def _extract_siding_details(self, text: str, data: Dict):
+        """Extract siding specifications"""
+        siding = data['material_specifications']['siding']
+        
+        # Siding type patterns
+        siding_types = [
+            r'(?:HARDIE\s+PLANK|HARDIE\s+SIDING)',
+            r'(?:VINYL\s+SIDING|VINYL)',
+            r'(?:WOOD\s+SIDING|WOOD)',
+            r'(?:FIBER\s+CEMENT|FIBER\s+CEMENT\s+SIDING)',
+            r'(?:BRICK\s+VENeer|BRICK)',
+            r'(?:STONE\s+VENeer|STONE)',
+            r'(?:STUCCO|STUCCO\s+FINISH)',
+            r'(?:BOARD\s+AND\s+BATTEN|BOARD\s+BATTEN)'
+        ]
+        
+        for pattern in siding_types:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                siding['type'] = matches[0].upper()
+                siding['details'].append(f"Siding type: {matches[0]}")
+                self.logger.info(f"Found siding type: {matches[0]}")
+                break
+        
+        # Estimate siding area based on wall area
+        if data.get('wall_areas', {}).get('total_sqft') and not siding['area_sqft']:
+            # Siding typically covers exterior walls (roughly 60-70% of total wall area)
+            wall_area = data['wall_areas']['total_sqft']
+            siding_area = int(wall_area * 0.65)  # 65% of wall area
+            siding['area_sqft'] = siding_area
+            siding['details'].append(f"Estimated siding area: {siding_area} sqft")
+    
+    def _extract_flooring_details(self, text: str, data: Dict):
+        """Extract flooring specifications"""
+        flooring = data['material_specifications']['flooring']
+        
+        # Flooring type patterns
+        flooring_types = [
+            r'(?:HARDWOOD\s+FLOORING|HARDWOOD)',
+            r'(?:LAMINATE\s+FLOORING|LAMINATE)',
+            r'(?:TILE\s+FLOORING|CERAMIC\s+TILE)',
+            r'(?:CARPET|CARPETING)',
+            r'(?:VINYL\s+FLOORING|VINYL)',
+            r'(?:LUXURY\s+VINYL\s+PLANK|LVP)',
+            r'(?:ENGINEERED\s+HARDWOOD|ENGINEERED)',
+            r'(?:BAMBOO\s+FLOORING|BAMBOO)'
+        ]
+        
+        for pattern in flooring_types:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in matches:
+                if match not in flooring['types']:
+                    flooring['types'].append(match.upper())
+                    flooring['details'].append(f"Flooring type: {match}")
+                    self.logger.info(f"Found flooring type: {match}")
+        
+        # Estimate flooring areas by room type if not specified
+        if data['total_sqft'] and not flooring['areas']:
+            total_sqft = data['total_sqft']
+            # Rough estimates by room type
+            flooring['areas'] = {
+                'living_areas': int(total_sqft * 0.6),  # 60% living areas
+                'bedrooms': int(total_sqft * 0.25),     # 25% bedrooms
+                'bathrooms': int(total_sqft * 0.08),    # 8% bathrooms
+                'kitchen': int(total_sqft * 0.07)       # 7% kitchen
+            }
+            flooring['details'].append(f"Estimated flooring areas by room type")
+    
+    def _extract_interior_finish_details(self, text: str, data: Dict):
+        """Extract interior finish specifications"""
+        finishes = data['material_specifications']['interior_finishes']
+        
+        # Drywall thickness patterns
+        drywall_thickness_patterns = [
+            r'(\d+(?:/\d+)?)\s*(?:INCH|IN|[\'\"])\s*(?:DRYWALL|GYPSUM|SHEETROCK)',
+            r'(\d+(?:/\d+)?)\s*(?:INCH|IN|[\'\"])\s*(?:GYP|GYP\s+BOARD)',
+            r'(\d+(?:/\d+)?)\s*(?:INCH|IN|[\'\"])\s*(?:WALL\s+BOARD|WALLBOARD)'
+        ]
+        
+        for pattern in drywall_thickness_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                thickness = matches[0]
+                finishes['drywall']['thickness'] = thickness
+                finishes['drywall']['details'].append(f"Drywall thickness: {thickness}\"")
+                self.logger.info(f"Found drywall thickness: {thickness}\"")
+                break
+        
+        # Estimate drywall area based on wall area
+        if data.get('wall_areas', {}).get('total_sqft') and not finishes['drywall']['area_sqft']:
+            wall_area = data['wall_areas']['total_sqft']
+            # Drywall covers both sides of walls + ceilings
+            drywall_area = int(wall_area * 2.2)  # Both sides + some ceiling
+            finishes['drywall']['area_sqft'] = drywall_area
+            finishes['drywall']['details'].append(f"Estimated drywall area: {drywall_area} sqft")
+        
+        # Paint specifications
+        paint_patterns = [
+            r'(?:LATEX\s+PAINT|LATEX)',
+            r'(?:OIL\s+BASED\s+PAINT|OIL\s+BASED)',
+            r'(?:EGG\s+SHELL\s+FINISH|EGG\s+SHELL)',
+            r'(?:SEMI\s+GLOSS|SEMI\s+GLOSS\s+FINISH)',
+            r'(?:FLAT\s+FINISH|FLAT)',
+            r'(?:SATIN\s+FINISH|SATIN)'
+        ]
+        
+        for pattern in paint_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                paint_type = matches[0].upper()
+                if 'LATEX' in paint_type or 'OIL' in paint_type:
+                    finishes['paint']['finish'] = paint_type
+                else:
+                    finishes['paint']['primer'] = paint_type
+                finishes['paint']['details'].append(f"Paint type: {paint_type}")
+                self.logger.info(f"Found paint type: {paint_type}")
+        
+        # Estimate paint area (same as drywall area)
+        if finishes['drywall']['area_sqft'] and not finishes['paint']['area_sqft']:
+            finishes['paint']['area_sqft'] = finishes['drywall']['area_sqft']
+            finishes['paint']['details'].append(f"Estimated paint area: {finishes['drywall']['area_sqft']} sqft")
+        
+        # Trim specifications
+        trim_patterns = [
+            r'(\d+(?:\.\d+)?)\s*(?:INCH|IN|[\'\"])\s*(?:BASEBOARD|BASE)',
+            r'(\d+(?:\.\d+)?)\s*(?:INCH|IN|[\'\"])\s*(?:CROWN\s+MOLDING|CROWN)',
+            r'(\d+(?:\.\d+)?)\s*(?:INCH|IN|[\'\"])\s*(?:CASING|DOOR\s+CASING)'
+        ]
+        
+        for pattern in trim_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                size = matches[0]
+                if 'BASEBOARD' in pattern or 'BASE' in pattern:
+                    finishes['trim']['baseboard'] = size
+                elif 'CROWN' in pattern:
+                    finishes['trim']['crown_molding'] = size
+                elif 'CASING' in pattern:
+                    finishes['trim']['casing'] = size
+                finishes['trim']['details'].append(f"Trim size: {size}\"")
+                self.logger.info(f"Found trim size: {size}\"")
+    
+    def _log_system_summary(self, data: Dict):
+        """Log a summary of extracted system details"""
+        systems = data['system_details']
+        
+        self.logger.info("=== SYSTEM DETAILS SUMMARY ===")
+        
+        # HVAC summary
+        if systems['hvac']['equipment']['type']:
+            self.logger.info(f"HVAC: {systems['hvac']['equipment']['type']}")
+            if systems['hvac']['equipment']['capacity']:
+                self.logger.info(f"  Capacity: {systems['hvac']['equipment']['capacity']}")
+            if systems['hvac']['equipment']['efficiency']:
+                self.logger.info(f"  Efficiency: {systems['hvac']['equipment']['efficiency']}")
+            if systems['hvac']['ductwork']['linear_feet']:
+                self.logger.info(f"  Ductwork: {systems['hvac']['ductwork']['linear_feet']} linear feet")
+        
+        # Plumbing summary
+        if systems['plumbing']['water_heater']['type']:
+            self.logger.info(f"Water Heater: {systems['plumbing']['water_heater']['type']}")
+            if systems['plumbing']['water_heater']['capacity']:
+                self.logger.info(f"  Capacity: {systems['plumbing']['water_heater']['capacity']} gallons")
+            if systems['plumbing']['water_heater']['fuel_type']:
+                self.logger.info(f"  Fuel: {systems['plumbing']['water_heater']['fuel_type']}")
+        
+        # Electrical summary
+        if systems['electrical']['main_panel']['amperage']:
+            self.logger.info(f"Electrical Panel: {systems['electrical']['main_panel']['amperage']} amp")
+            if systems['electrical']['main_panel']['size']:
+                self.logger.info(f"  Size: {systems['electrical']['main_panel']['size']} spaces")
+            if systems['electrical']['wire']['linear_feet']:
+                self.logger.info(f"  Wire: {systems['electrical']['wire']['linear_feet']} linear feet")
+        
+        self.logger.info("=== END SYSTEM SUMMARY ===")
+    
+    def _log_material_summary(self, data: Dict):
+        """Log a summary of extracted material specifications"""
+        materials = data['material_specifications']
+        
+        self.logger.info("=== MATERIAL SPECIFICATIONS SUMMARY ===")
+        
+        # Insulation summary
+        if materials['insulation']['wall_r_value']:
+            self.logger.info(f"Wall Insulation: R-{materials['insulation']['wall_r_value']}")
+        if materials['insulation']['ceiling_r_value']:
+            self.logger.info(f"Ceiling Insulation: R-{materials['insulation']['ceiling_r_value']}")
+        if materials['insulation']['type']:
+            self.logger.info(f"Insulation Type: {materials['insulation']['type']}")
+        
+        # Siding summary
+        if materials['siding']['type']:
+            self.logger.info(f"Siding: {materials['siding']['type']}")
+            if materials['siding']['area_sqft']:
+                self.logger.info(f"  Area: {materials['siding']['area_sqft']} sqft")
+        
+        # Flooring summary
+        if materials['flooring']['types']:
+            self.logger.info(f"Flooring Types: {', '.join(materials['flooring']['types'])}")
+        
+        # Interior finishes summary
+        if materials['interior_finishes']['drywall']['area_sqft']:
+            self.logger.info(f"Drywall: {materials['interior_finishes']['drywall']['area_sqft']} sqft")
+        if materials['interior_finishes']['paint']['area_sqft']:
+            self.logger.info(f"Paint: {materials['interior_finishes']['paint']['area_sqft']} sqft")
+        
+        self.logger.info("=== END MATERIAL SUMMARY ===")
+    
     def _classify_room_type(self, room_name: str) -> str:
         """Classify room type based on name"""
         room_name_upper = room_name.upper()
@@ -971,6 +2009,109 @@ class TesseractTakeoffExtractor:
         if 'wall_areas' in data:
             wall_areas = data['wall_areas']
             print(f"Wall Areas: {wall_areas['total_sqft']:.0f} sqft total ({wall_areas['first_floor_sqft']:.0f} first floor, {wall_areas['second_floor_sqft']:.0f} second floor)")
+        
+        # Show structural details if available
+        if 'structural_details' in data:
+            structural = data['structural_details']
+            print(f"\nStructural Details:")
+            
+            # Foundation
+            if structural['foundation']['type']:
+                print(f"  Foundation: {structural['foundation']['type']}")
+                if structural['foundation']['thickness']:
+                    print(f"    Thickness: {structural['foundation']['thickness']}")
+                if structural['foundation']['area_sqft']:
+                    print(f"    Area: {structural['foundation']['area_sqft']} sqft")
+            
+            # Roof
+            if structural['roof']['type']:
+                print(f"  Roof: {structural['roof']['type']}")
+                if structural['roof']['pitch']:
+                    print(f"    Pitch: {structural['roof']['pitch']}")
+                if structural['roof']['material']:
+                    print(f"    Material: {structural['roof']['material']}")
+                if structural['roof']['area_sqft']:
+                    print(f"    Area: {structural['roof']['area_sqft']} sqft")
+            
+            # Beams
+            if structural['beams']['sizes']:
+                print(f"  Beams: {', '.join(structural['beams']['sizes'])}")
+            
+            # Joists
+            if structural['joists']['size']:
+                print(f"  Joists: {structural['joists']['size']}")
+                if structural['joists']['spacing']:
+                    print(f"    Spacing: {structural['joists']['spacing']}")
+                if structural['joists']['count']:
+                    print(f"    Count: {structural['joists']['count']}")
+            
+            # Framing
+            if structural['framing']['stud_size']:
+                print(f"  Framing: {structural['framing']['stud_size']} studs @ {structural['framing']['stud_spacing']}")
+        
+        # Show system details if available
+        if 'system_details' in data:
+            systems = data['system_details']
+            print(f"\nSystem Details:")
+            
+            # HVAC
+            if systems['hvac']['equipment']['type']:
+                print(f"  HVAC: {systems['hvac']['equipment']['type']}")
+                if systems['hvac']['equipment']['capacity']:
+                    print(f"    Capacity: {systems['hvac']['equipment']['capacity']}")
+                if systems['hvac']['equipment']['efficiency']:
+                    print(f"    Efficiency: {systems['hvac']['equipment']['efficiency']}")
+                if systems['hvac']['ductwork']['linear_feet']:
+                    print(f"    Ductwork: {systems['hvac']['ductwork']['linear_feet']} linear feet")
+            
+            # Plumbing
+            if systems['plumbing']['water_heater']['type']:
+                print(f"  Water Heater: {systems['plumbing']['water_heater']['type']}")
+                if systems['plumbing']['water_heater']['capacity']:
+                    print(f"    Capacity: {systems['plumbing']['water_heater']['capacity']} gallons")
+                if systems['plumbing']['water_heater']['fuel_type']:
+                    print(f"    Fuel: {systems['plumbing']['water_heater']['fuel_type']}")
+            
+            # Electrical
+            if systems['electrical']['main_panel']['amperage']:
+                print(f"  Electrical Panel: {systems['electrical']['main_panel']['amperage']} amp")
+                if systems['electrical']['main_panel']['size']:
+                    print(f"    Size: {systems['electrical']['main_panel']['size']} spaces")
+                if systems['electrical']['wire']['linear_feet']:
+                    print(f"    Wire: {systems['electrical']['wire']['linear_feet']} linear feet")
+        
+        # Show material specifications if available
+        if 'material_specifications' in data:
+            materials = data['material_specifications']
+            print(f"\nMaterial Specifications:")
+            
+            # Insulation
+            if materials['insulation']['wall_r_value'] or materials['insulation']['ceiling_r_value']:
+                print(f"  Insulation:")
+                if materials['insulation']['wall_r_value']:
+                    print(f"    Wall: R-{materials['insulation']['wall_r_value']}")
+                if materials['insulation']['ceiling_r_value']:
+                    print(f"    Ceiling: R-{materials['insulation']['ceiling_r_value']}")
+                if materials['insulation']['type']:
+                    print(f"    Type: {materials['insulation']['type']}")
+            
+            # Siding
+            if materials['siding']['type']:
+                print(f"  Siding: {materials['siding']['type']}")
+                if materials['siding']['area_sqft']:
+                    print(f"    Area: {materials['siding']['area_sqft']} sqft")
+            
+            # Flooring
+            if materials['flooring']['types']:
+                print(f"  Flooring: {', '.join(materials['flooring']['types'])}")
+            
+            # Interior finishes
+            if materials['interior_finishes']['drywall']['area_sqft'] or materials['interior_finishes']['paint']['area_sqft']:
+                print(f"  Interior Finishes:")
+                if materials['interior_finishes']['drywall']['area_sqft']:
+                    print(f"    Drywall: {materials['interior_finishes']['drywall']['area_sqft']} sqft")
+                if materials['interior_finishes']['paint']['area_sqft']:
+                    print(f"    Paint: {materials['interior_finishes']['paint']['area_sqft']} sqft")
         
         if data['rooms']:
             print("\nRoom Details:")
