@@ -73,7 +73,7 @@ class TesseractTakeoffExtractor:
         return extracted_texts
     
     def _preprocess_image_for_ocr(self, image: Image.Image) -> np.ndarray:
-        """Preprocess image for optimal OCR results"""
+        """Preprocess image for optimal OCR results - enhanced for House-Floor-Plans-2"""
         # Convert PIL to OpenCV format
         img_array = np.array(image)
         img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
@@ -81,19 +81,35 @@ class TesseractTakeoffExtractor:
         # Convert to grayscale
         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
         
+        # Enhance contrast using CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(enhanced, (1, 1), 0)
+        
         # Apply adaptive thresholding for better text contrast
         thresh = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
         )
         
         # Morphological operations to clean up the image
         kernel = np.ones((1, 1), np.uint8)
         cleaned = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         
-        # Denoise
+        # Denoise with median blur
         denoised = cv2.medianBlur(cleaned, 3)
         
-        return denoised
+        # Additional enhancement: sharpen the image
+        kernel_sharpen = np.array([[-1,-1,-1],
+                                   [-1, 9,-1],
+                                   [-1,-1,-1]])
+        sharpened = cv2.filter2D(denoised, -1, kernel_sharpen)
+        
+        # Ensure the image is in the right format for Tesseract
+        final_image = cv2.convertScaleAbs(sharpened)
+        
+        return final_image
     
     def _extract_text_multiple_configs(self, image: np.ndarray, page_num: int) -> Dict[str, str]:
         """Extract text using multiple Tesseract configurations"""
@@ -344,6 +360,9 @@ class TesseractTakeoffExtractor:
         # Extract material specifications
         self._extract_material_specifications(full_text, construction_data)
         
+        # Validate and correct unrealistic values
+        self._validate_and_correct_unrealistic_values(construction_data)
+        
         return construction_data
     
     def _extract_master_bathroom(self, text: str, data: Dict):
@@ -535,24 +554,153 @@ class TesseractTakeoffExtractor:
         
         self.logger.info("=== END VALIDATION ===")
     
+    def _validate_and_correct_unrealistic_values(self, data: Dict):
+        """Validate and correct unrealistic values based on house size and common construction practices"""
+        self.logger.info("Validating and correcting unrealistic values...")
+        
+        total_sqft = data['total_sqft']
+        if total_sqft == 0:
+            self.logger.warning("No total square footage found - skipping validation")
+            return
+        
+        # Validate wall areas
+        if 'wall_areas' in data and data['wall_areas']['total_sqft'] > 0:
+            wall_area = data['wall_areas']['total_sqft']
+            # Typical wall area is 0.8-1.5x floor area for residential
+            expected_wall_area_min = total_sqft * 0.8
+            expected_wall_area_max = total_sqft * 1.5
+            
+            if wall_area > expected_wall_area_max:
+                # Recalculate wall area based on reasonable assumptions
+                corrected_wall_area = int(total_sqft * 1.2)  # 1.2x is typical
+                data['wall_areas']['total_sqft'] = corrected_wall_area
+                data['wall_areas']['first_floor_sqft'] = int(corrected_wall_area * 0.6)
+                data['wall_areas']['second_floor_sqft'] = int(corrected_wall_area * 0.4)
+                self.logger.warning(f"Corrected unrealistic wall area: {wall_area} -> {corrected_wall_area} sqft")
+            elif wall_area < expected_wall_area_min:
+                # Recalculate wall area based on reasonable assumptions
+                corrected_wall_area = int(total_sqft * 1.2)
+                data['wall_areas']['total_sqft'] = corrected_wall_area
+                data['wall_areas']['first_floor_sqft'] = int(corrected_wall_area * 0.6)
+                data['wall_areas']['second_floor_sqft'] = int(corrected_wall_area * 0.4)
+                self.logger.warning(f"Corrected unrealistic wall area: {wall_area} -> {corrected_wall_area} sqft")
+        
+        # Validate fixture counts
+        fixtures = data['fixtures']
+        
+        # Window count validation
+        if fixtures['windows'] > 0:
+            # Typical: 1 window per 100-200 sqft
+            expected_windows_min = max(4, int(total_sqft / 200))
+            expected_windows_max = int(total_sqft / 100)
+            
+            if fixtures['windows'] > expected_windows_max:
+                corrected_windows = expected_windows_max
+                fixtures['windows'] = corrected_windows
+                self.logger.warning(f"Corrected unrealistic window count: {fixtures['windows']} -> {corrected_windows}")
+            elif fixtures['windows'] < expected_windows_min:
+                corrected_windows = expected_windows_min
+                fixtures['windows'] = corrected_windows
+                self.logger.warning(f"Corrected unrealistic window count: {fixtures['windows']} -> {corrected_windows}")
+        
+        # Door count validation
+        if fixtures['doors'] > 0:
+            # Typical: 1 door per 200-400 sqft
+            expected_doors_min = max(3, int(total_sqft / 400))
+            expected_doors_max = int(total_sqft / 200)
+            
+            if fixtures['doors'] > expected_doors_max:
+                corrected_doors = expected_doors_max
+                fixtures['doors'] = corrected_doors
+                self.logger.warning(f"Corrected unrealistic door count: {fixtures['doors']} -> {corrected_doors}")
+            elif fixtures['doors'] < expected_doors_min:
+                corrected_doors = expected_doors_min
+                fixtures['doors'] = corrected_doors
+                self.logger.warning(f"Corrected unrealistic door count: {fixtures['doors']} -> {corrected_doors}")
+        
+        # Electrical outlet validation
+        if fixtures['electrical_outlets'] > 0:
+            # Typical: 1 outlet per 50-100 sqft
+            expected_outlets_min = max(8, int(total_sqft / 100))
+            expected_outlets_max = int(total_sqft / 50)
+            
+            if fixtures['electrical_outlets'] > expected_outlets_max:
+                corrected_outlets = expected_outlets_max
+                fixtures['electrical_outlets'] = corrected_outlets
+                self.logger.warning(f"Corrected unrealistic outlet count: {fixtures['electrical_outlets']} -> {corrected_outlets}")
+            elif fixtures['electrical_outlets'] < expected_outlets_min:
+                corrected_outlets = expected_outlets_min
+                fixtures['electrical_outlets'] = corrected_outlets
+                self.logger.warning(f"Corrected unrealistic outlet count: {fixtures['electrical_outlets']} -> {corrected_outlets}")
+        
+        # Plumbing fixture validation
+        if fixtures['plumbing_fixtures'] > 0:
+            # Typical: 1 fixture per 200-400 sqft
+            expected_fixtures_min = max(3, int(total_sqft / 400))
+            expected_fixtures_max = int(total_sqft / 200)
+            
+            if fixtures['plumbing_fixtures'] > expected_fixtures_max:
+                corrected_fixtures = expected_fixtures_max
+                fixtures['plumbing_fixtures'] = corrected_fixtures
+                self.logger.warning(f"Corrected unrealistic plumbing fixture count: {fixtures['plumbing_fixtures']} -> {corrected_fixtures}")
+            elif fixtures['plumbing_fixtures'] < expected_fixtures_min:
+                corrected_fixtures = expected_fixtures_min
+                fixtures['plumbing_fixtures'] = corrected_fixtures
+                self.logger.warning(f"Corrected unrealistic plumbing fixture count: {fixtures['plumbing_fixtures']} -> {corrected_fixtures}")
+        
+        self.logger.info("Validation and correction completed")
+    
     def _extract_square_footage(self, text: str, data: Dict):
         """Extract total square footage with high priority patterns"""
-        # High priority patterns for total square footage
+        # High priority patterns for total square footage - enhanced based on House-Floor-Plans-2 analysis
         patterns = [
             r'TOTAL\s+COVERED\s+(\d+)',
             r'TOTAL\s+LIVING\s+(\d+)',
             r'TOTAL\s+AREA\s+(\d+)',
             r'TOTAL\s+SQ\.?\s*FT\.?\s*(\d+)',
-            r'TOTAL\s+(\d+)\s*SQ\.?\s*FT\.?'
+            r'TOTAL\s+(\d+)\s*SQ\.?\s*FT\.?',
+            # New patterns based on House-Floor-Plans-2 analysis
+            r'(\d+)\s+SQUARE\s+FEET',
+            r'(\d+)\s+SQFT',
+            r'(\d+)\s+SQ\s+FT',
+            r'AREA\s*:?\s*(\d+)',
+            r'LIVING\s+AREA\s*:?\s*(\d+)',
+            r'COVERED\s+AREA\s*:?\s*(\d+)',
+            r'(\d+)\s*SF',  # Square feet abbreviation
+            r'(\d+)\s*S\.F\.',  # Square feet abbreviation with periods
+            r'GROSS\s+AREA\s*:?\s*(\d+)',
+            r'NET\s+AREA\s*:?\s*(\d+)',
+            r'BUILDING\s+AREA\s*:?\s*(\d+)',
+            r'FLOOR\s+AREA\s*:?\s*(\d+)',
+            # Look for standalone large numbers that could be total area
+            r'\b(\d{3,4})\b(?=\s*(?:SQ|SF|SQUARE|TOTAL|AREA|LIVING|COVERED))',
+            r'(?:TOTAL|AREA|LIVING|COVERED|GROSS|NET)\s*:?\s*(\d{3,4})\b'
         ]
         
+        found_areas = []
         for pattern in patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for match in matches:
                 sqft = int(match)
-                if sqft > data['total_sqft'] and sqft >= 500:  # Reasonable minimum
-                    data['total_sqft'] = sqft
-                    self.logger.info(f"Found total square footage: {sqft} sqft")
+                if 500 <= sqft <= 10000:  # Reasonable house size range
+                    found_areas.append(sqft)
+                    self.logger.info(f"Found potential total square footage: {sqft} sqft")
+        
+        # If we found multiple areas, take the largest reasonable one
+        if found_areas:
+            # Sort by size and take the largest that's reasonable
+            found_areas.sort(reverse=True)
+            for area in found_areas:
+                if 800 <= area <= 5000:  # Most likely total area range
+                    if area > data['total_sqft']:
+                        data['total_sqft'] = area
+                        self.logger.info(f"Selected total square footage: {area} sqft")
+                        return
+            
+            # If no area in the ideal range, take the largest
+            if found_areas[0] > data['total_sqft']:
+                data['total_sqft'] = found_areas[0]
+                self.logger.info(f"Selected largest total square footage: {found_areas[0]} sqft")
     
     def _extract_floor_areas(self, text: str, data: Dict):
         """Extract floor-specific areas"""
@@ -838,7 +986,7 @@ class TesseractTakeoffExtractor:
             if 5 <= wall_length <= 100:
                 data['wall_lengths'].append(wall_length)
         
-        # Enhanced room dimension patterns for construction plans
+        # Enhanced room dimension patterns for construction plans - improved based on House-Floor-Plans-2 analysis
         dimension_patterns = [
             # Standard "width x length" patterns
             r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)',
@@ -846,7 +994,7 @@ class TesseractTakeoffExtractor:
             r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*=\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)',
             # Patterns with spaces around dimensions
             r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s+[xX×]\s+(\d+[\'\"]?\s*-\s*\d+[\'\"]?)',
-            # Simple number patterns (for basic dimensions)
+            # Simple number patterns (for basic dimensions) - enhanced
             r'(\d+)\s*[xX×]\s*(\d+)',
             # Patterns with feet and inches
             r'(\d+[\'\"])\s*[xX×]\s*(\d+[\'\"]?)',
@@ -858,7 +1006,19 @@ class TesseractTakeoffExtractor:
             # Look for patterns with just numbers and x
             r'(\d+)\s*[xX×]\s*(\d+)',
             # Look for patterns with feet-inches format
-            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)'
+            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)',
+            # New patterns based on House-Floor-Plans-2 analysis
+            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*=',  # With equals at end
+            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*\(',  # With parenthesis
+            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*\)',  # With closing parenthesis
+            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[^\w]',  # With non-word character
+            # Patterns for dimensions with quotes and dashes
+            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[\'\"]',
+            # Patterns for dimensions with spaces and special characters
+            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[^\w\s]',
+            # More flexible patterns for OCR errors
+            r'(\d+[\'\"]?\s*[-–]\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*[-–]\s*\d+[\'\"]?)',  # Different dash types
+            r'(\d+[\'\"]?\s*[-–]\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*[-–]\s*\d+[\'\"]?)',  # Different dash types
         ]
         
         total_matches = 0
@@ -1302,12 +1462,14 @@ class TesseractTakeoffExtractor:
                 self.logger.info("Added default joist spacing: 16\" O.C.")
             
             # Add default foundation thickness if not found
+            foundation = data['structural_details']['foundation']
             if not foundation['thickness']:
                 foundation['thickness'] = '4"'
                 foundation['details'].append("Default foundation thickness: 4 inches")
                 self.logger.info("Added default foundation thickness: 4 inches")
             
             # Add default roof pitch if not found
+            roof = data['structural_details']['roof']
             if not roof['pitch']:
                 roof['pitch'] = '6/12'
                 roof['details'].append("Default roof pitch: 6/12")
