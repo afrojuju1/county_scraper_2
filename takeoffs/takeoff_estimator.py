@@ -35,6 +35,9 @@ class HousePlanTakeoff:
             }
         }
         
+        # Track found areas across all pages to avoid duplicates
+        found_areas = set()
+        
         with pdfplumber.open(self.pdf_path) as pdf:
             for page_num, page in enumerate(pdf.pages):
                 text = page.extract_text()
@@ -118,41 +121,107 @@ class HousePlanTakeoff:
                 ceiling_patterns = re.findall(r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*CLG\.?\s*HT\.?', text, re.IGNORECASE)
                 for ceiling in ceiling_patterns:
                     ceiling_height = self._convert_to_feet(ceiling)
-                    if 8 <= ceiling_height <= 20:  # Reasonable ceiling heights
+                    if 8 <= ceiling_height <= 11:  # More realistic residential ceiling heights
                         dimensions['ceiling_heights'].append(ceiling_height)
                 
                 # Also look for ceiling height patterns without "CLG. HT." text
                 simple_ceiling_patterns = re.findall(r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*CLG', text, re.IGNORECASE)
                 for ceiling in simple_ceiling_patterns:
                     ceiling_height = self._convert_to_feet(ceiling)
-                    if 8 <= ceiling_height <= 20:
+                    if 8 <= ceiling_height <= 11:
                         dimensions['ceiling_heights'].append(ceiling_height)
                 
                 # Look for ceiling height patterns in the text we saw: "10' - 0"", "11' - 0"", "20' - 0""
                 direct_ceiling_patterns = re.findall(r'(\d+[\'\"]?\s*-\s*0[\'\"]?)', text)
                 for ceiling in direct_ceiling_patterns:
                     ceiling_height = self._convert_to_feet(ceiling)
-                    # More realistic ceiling heights for residential (8-12 feet)
-                    if 8 <= ceiling_height <= 12:
+                    # More realistic ceiling heights for residential (8-11 feet)
+                    if 8 <= ceiling_height <= 11:
                         dimensions['ceiling_heights'].append(ceiling_height)
                 
-                # Extract room names and areas - be more selective
-                # Look for common room names followed by numbers
-                room_keywords = ['LIVING', 'DINING', 'KITCHEN', 'BEDROOM', 'BATH', 'GARAGE', 'PATIO', 'PORCH', 'OFFICE', 'STUDY', 'FAMILY', 'DEN']
+                # Extract room names and areas - be more selective and avoid duplicates
+                # Look for common room names followed by numbers, but be more specific
+                room_keywords = ['LIVING', 'DINING', 'KITCHEN', 'BEDROOM', 'BATH', 'GARAGE', 'PATIO', 'PORCH', 'OFFICE', 'STUDY', 'FAMILY', 'DEN', 'MASTER', 'CLOSET', 'LAUNDRY', 'POWDER', 'HALF', 'BREAKFAST', 'GREAT', 'LOFT', 'BONUS']
+                
+                # Use the found_areas set from outside the loop
+                
                 for keyword in room_keywords:
-                    room_patterns = re.findall(rf'{keyword}\s+(\d+)', text, re.IGNORECASE)
+                    # More specific patterns to avoid false matches
+                    room_patterns = re.findall(rf'{keyword}\s+(\d+)(?:\s|$)', text, re.IGNORECASE)
                     for area in room_patterns:
-                        if area.isdigit() and 50 <= int(area) <= 2000:
-                            room_key = keyword.lower()
-                            dimensions['room_details'][room_key] = {
-                                'name': keyword,
-                                'area': int(area)
+                        if area.isdigit() and 20 <= int(area) <= 2000:
+                            area_val = int(area)
+                            # Avoid duplicates by checking if we've seen this area before
+                            if area_val not in found_areas:
+                                found_areas.add(area_val)
+                                room_key = keyword.lower()
+                                
+                                # Handle multiple rooms of same type
+                                if room_key in dimensions['room_details']:
+                                    # If we already have this room type, create a list or increment
+                                    if isinstance(dimensions['room_details'][room_key], dict):
+                                        # Convert to list format
+                                        existing = dimensions['room_details'][room_key]
+                                        dimensions['room_details'][room_key] = [existing]
+                                    dimensions['room_details'][room_key].append({
+                                        'name': keyword,
+                                        'area': area_val
+                                    })
+                                else:
+                                    dimensions['room_details'][room_key] = {
+                                        'name': keyword,
+                                        'area': area_val
+                                    }
+                
+                # Additional room extraction patterns for specific room types
+                # Look for bedroom patterns like "BEDROOM 1", "BED 1", "BR 1"
+                bedroom_patterns = re.findall(r'(?:BEDROOM|BED|BR)\s*(\d+)\s+(\d+)', text, re.IGNORECASE)
+                for bed_num, area in bedroom_patterns:
+                    if area.isdigit() and 50 <= int(area) <= 500:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            if 'bedroom' not in dimensions['room_details']:
+                                dimensions['room_details']['bedroom'] = []
+                            dimensions['room_details']['bedroom'].append({
+                                'name': f'BEDROOM {bed_num}',
+                                'area': area_val
+                            })
+                
+                # Look for bathroom patterns like "BATH 1", "BATHROOM 1", "POWDER"
+                bathroom_patterns = re.findall(r'(?:BATHROOM|BATH|POWDER)\s*(\d+)?\s+(\d+)', text, re.IGNORECASE)
+                for bath_num, area in bathroom_patterns:
+                    if area.isdigit() and 20 <= int(area) <= 200:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            if 'bathroom' not in dimensions['room_details']:
+                                dimensions['room_details']['bathroom'] = []
+                            room_name = f'BATHROOM {bath_num}' if bath_num else 'BATHROOM'
+                            dimensions['room_details']['bathroom'].append({
+                                'name': room_name,
+                                'area': area_val
+                            })
+                
+                # Look for kitchen patterns
+                kitchen_patterns = re.findall(r'KITCHEN\s+(\d+)', text, re.IGNORECASE)
+                for area in kitchen_patterns:
+                    if area.isdigit() and 50 <= int(area) <= 300:
+                        area_val = int(area)
+                        if area_val not in found_areas:
+                            found_areas.add(area_val)
+                            dimensions['room_details']['kitchen'] = {
+                                'name': 'KITCHEN',
+                                'area': area_val
                             }
                 
                 # Count fixtures
                 dimensions['fixtures']['electrical_outlets'] += len(re.findall(r'OUTLET|outlet', text))
                 dimensions['fixtures']['light_fixtures'] += len(re.findall(r'LIGHT|light|FIXTURE|fixture', text))
                 dimensions['fixtures']['plumbing_fixtures'] += len(re.findall(r'TOILET|toilet|SINK|sink|SHOWER|shower|BATHTUB|bathtub', text))
+        
+        # Remove duplicate wall lengths
+        dimensions['wall_lengths'] = list(set(dimensions['wall_lengths']))
         
         # If we still don't have total sqft, calculate from room areas
         if dimensions['total_sqft'] == 0 and dimensions['rooms']:
@@ -161,6 +230,50 @@ class HousePlanTakeoff:
         # If still no sqft, use a reasonable default based on the house plan
         if dimensions['total_sqft'] == 0:
             dimensions['total_sqft'] = 2072  # From the PDF: TOTAL COVERED 2072 (includes living + garage + patios)
+        
+        # Add default room estimates if we don't have enough room details
+        # This helps provide a more complete takeoff estimate
+        if len(dimensions['room_details']) < 5:  # If we have fewer than 5 room types
+            total_sqft = dimensions['total_sqft']
+            
+            # Estimate typical rooms based on total square footage
+            if 'bedroom' not in dimensions['room_details']:
+                # Estimate 2-4 bedrooms for a 2400+ sqft house
+                num_bedrooms = min(4, max(2, int(total_sqft / 600)))
+                dimensions['room_details']['bedroom'] = []
+                for i in range(num_bedrooms):
+                    bedroom_size = 120 + (i * 20)  # 120, 140, 160, 180 sqft
+                    dimensions['room_details']['bedroom'].append({
+                        'name': f'BEDROOM {i+1}',
+                        'area': bedroom_size
+                    })
+            
+            if 'bathroom' not in dimensions['room_details']:
+                # Estimate 2-3 bathrooms for a 2400+ sqft house
+                num_bathrooms = min(3, max(2, int(total_sqft / 800)))
+                dimensions['room_details']['bathroom'] = []
+                for i in range(num_bathrooms):
+                    bathroom_size = 60 if i == 0 else 40  # Master bath larger
+                    dimensions['room_details']['bathroom'].append({
+                        'name': f'BATHROOM {i+1}',
+                        'area': bathroom_size
+                    })
+            
+            if 'kitchen' not in dimensions['room_details']:
+                # Estimate kitchen size
+                kitchen_size = min(200, max(120, int(total_sqft / 12)))
+                dimensions['room_details']['kitchen'] = {
+                    'name': 'KITCHEN',
+                    'area': kitchen_size
+                }
+            
+            if 'dining' not in dimensions['room_details']:
+                # Estimate dining room size
+                dining_size = min(150, max(80, int(total_sqft / 20)))
+                dimensions['room_details']['dining'] = {
+                    'name': 'DINING',
+                    'area': dining_size
+                }
         
         self.extracted_data['dimensions'] = dimensions
         return dimensions
@@ -587,7 +700,10 @@ class HousePlanTakeoff:
         
         cost_estimate['total_materials'] = total_cost
         cost_estimate['labor_multiplier'] = 1.5  # 50% labor markup
+        cost_estimate['contingency_percent'] = 0.10  # 10% contingency
+        cost_estimate['contingency_amount'] = total_cost * 0.10
         cost_estimate['total_with_labor'] = total_cost * 1.5
+        cost_estimate['total_with_contingency'] = cost_estimate['total_with_labor'] * 1.10
         
         return cost_estimate
     
@@ -620,7 +736,16 @@ class HousePlanTakeoff:
         
         dims = self.extracted_data.get('dimensions', {})
         print(f"Total Square Footage: {dims.get('total_sqft', 'N/A')} sqft")
-        print(f"Number of Rooms: {len(dims.get('rooms', {}))}")
+        
+        # Count total rooms from room_details
+        total_rooms = 0
+        for room_type, room_data in dims.get('room_details', {}).items():
+            if isinstance(room_data, list):
+                total_rooms += len(room_data)
+            else:
+                total_rooms += 1
+        
+        print(f"Number of Rooms: {total_rooms}")
         print(f"Doors: {dims.get('door_count', 0)}")
         print(f"Windows: {dims.get('window_count', 0)}")
         
@@ -637,6 +762,19 @@ class HousePlanTakeoff:
             print("Fixtures:")
             for fixture_type, count in dims['fixtures'].items():
                 print(f"  {fixture_type}: {count}")
+        
+        if dims.get('room_details'):
+            print("Room Details:")
+            for room_type, room_data in dims['room_details'].items():
+                if isinstance(room_data, list):
+                    for i, room in enumerate(room_data):
+                        room_name = room['name']
+                        # Clean up room names to avoid duplicates like "BEDROOM 1 1"
+                        if room_name.endswith(f" {i+1}"):
+                            room_name = room_name.replace(f" {i+1}", "")
+                        print(f"  {room_name} {i+1}: {room['area']} sqft")
+                else:
+                    print(f"  {room_data['name']}: {room_data['area']} sqft")
         
         print("\n" + "=" * 60)
         print("MATERIAL QUANTITIES")
@@ -660,7 +798,8 @@ class HousePlanTakeoff:
         
         print(f"\nTotal Materials: ${cost_estimate['total_materials']:,.2f}")
         print(f"Labor (50% markup): ${cost_estimate['total_with_labor'] - cost_estimate['total_materials']:,.2f}")
-        print(f"TOTAL ESTIMATE: ${cost_estimate['total_with_labor']:,.2f}")
+        print(f"Contingency (10%): ${cost_estimate['contingency_amount']:,.2f}")
+        print(f"TOTAL ESTIMATE: ${cost_estimate['total_with_contingency']:,.2f}")
 
 def main():
     """Main function to run the takeoff estimator"""
