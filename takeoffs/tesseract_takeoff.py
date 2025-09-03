@@ -15,6 +15,12 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import pandas as pd
+import concurrent.futures
+import threading
+from datetime import datetime
+import time
+import argparse
+import sys
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -27,8 +33,9 @@ class TesseractTakeoffExtractor:
         if not self.pdf_path.exists():
             raise FileNotFoundError(f"PDF file not found: {pdf_path}")
         
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger(f"{__name__}_{id(self)}")
         self.extracted_data = {}
+        self.lock = threading.Lock()  # Thread safety for logging
         
         # Tesseract configuration for construction plans
         self.tesseract_configs = {
@@ -226,6 +233,28 @@ class TesseractTakeoffExtractor:
                         'area': bathroom_size,
                         'type': 'bathroom'
                     })
+            
+            # Check if we should convert small bathrooms to half baths based on half bath indicators
+            if 'half_bath' not in data['rooms']:
+                # Look for half bath indicators in the raw text
+                half_bath_indicators = re.findall(r'(?:HALF|POWDER|1/2|WC|W\.C\.)', data.get('raw_text', ''), re.IGNORECASE)
+                if half_bath_indicators and len(half_bath_indicators) > 3:  # Multiple indicators suggest half baths
+                    self.logger.info(f"Found {len(half_bath_indicators)} half bath indicators, converting small bathrooms...")
+                    
+                    # Convert the smallest bathroom to half bath
+                    if 'bathroom' in data['rooms'] and isinstance(data['rooms']['bathroom'], list):
+                        smallest_bath = min(data['rooms']['bathroom'], key=lambda x: x['area'])
+                        if smallest_bath['area'] <= 50:  # Small bathroom
+                            # Remove from regular bathrooms
+                            data['rooms']['bathroom'] = [r for r in data['rooms']['bathroom'] if r != smallest_bath]
+                            
+                            # Add as half bath
+                            data['rooms']['half_bath'] = [{
+                                'name': 'HALF BATH',
+                                'area': smallest_bath['area'],
+                                'type': 'half_bath'
+                            }]
+                            self.logger.info(f"Converted estimated bathroom ({smallest_bath['area']} sqft) to HALF BATH")
             
             if 'kitchen' not in data['rooms']:
                 # Estimate kitchen size - typically on first floor
@@ -467,20 +496,87 @@ class TesseractTakeoffExtractor:
                     })
         
         # Look for half bath/powder room patterns specifically
-        half_bath_patterns = re.findall(r'(?:HALF\s+BATH|POWDER\s+ROOM|POWDER|1/2\s+BATH)\s+(\d+)', text, re.IGNORECASE)
-        for area in half_bath_patterns:
-            if area.isdigit() and 15 <= int(area) <= 60:  # Half baths are typically smaller
-                area_val = int(area)
-                if area_val not in found_areas:
-                    found_areas.add(area_val)
+        half_bath_patterns = [
+            r'(?:HALF\s+BATH|POWDER\s+ROOM|POWDER|1/2\s+BATH)\s+(\d+)',
+            r'(?:HALF\s+BATH|POWDER\s+ROOM|POWDER|1/2\s+BATH)\s*(\d+)',
+            r'(\d+)\s*(?:HALF\s+BATH|POWDER\s+ROOM|POWDER|1/2\s+BATH)',
+            r'(?:HALF|POWDER)\s*(\d+)',  # More flexible patterns
+            r'(\d+)\s*(?:HALF|POWDER)',
+            r'(?:WC|W\.C\.)\s*(\d+)',  # Water closet patterns
+            r'(\d+)\s*(?:WC|W\.C\.)'
+        ]
+        
+        # First, look for any half bath indicators in the text
+        half_bath_indicators = re.findall(r'(?:HALF|POWDER|1/2|WC|W\.C\.)', text, re.IGNORECASE)
+        if half_bath_indicators:
+            self.logger.info(f"Found {len(half_bath_indicators)} half bath indicators in text: {half_bath_indicators[:5]}")
+        
+        half_bath_found = False
+        for i, pattern in enumerate(half_bath_patterns):
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            self.logger.debug(f"Half bath pattern {i+1}: Found {len(matches)} matches")
+            for area in matches:
+                if area.isdigit() and 15 <= int(area) <= 60:  # Half baths are typically smaller
+                    area_val = int(area)
+                    if area_val not in found_areas:
+                        found_areas.add(area_val)
+                        if 'half_bath' not in data['rooms']:
+                            data['rooms']['half_bath'] = []
+                        data['rooms']['half_bath'].append({
+                            'name': 'HALF BATH',
+                            'area': area_val,
+                            'type': 'half_bath'
+                        })
+                        self.logger.info(f"Found room: HALF BATH = {area_val} sqft")
+                        half_bath_found = True
+        
+        # If no explicit half bath found, look for small bathroom areas that might be half baths
+        if not half_bath_found:
+            self.logger.info("No explicit half bath found, checking for small bathroom areas...")
+            # Look for small bathroom areas (15-50 sqft) that might be half baths
+            small_bathroom_areas = []
+            for room_type, room_data in data['rooms'].items():
+                if room_type == 'bathroom' and isinstance(room_data, list):
+                    for room in room_data:
+                        if 15 <= room['area'] <= 50:  # Small bathroom might be half bath
+                            small_bathroom_areas.append(room)
+            
+            self.logger.info(f"Found {len(small_bathroom_areas)} small bathroom areas: {[r['area'] for r in small_bathroom_areas]}")
+            
+            # If we have small bathrooms, convert the smallest one to half bath
+            if small_bathroom_areas:
+                smallest_bath = min(small_bathroom_areas, key=lambda x: x['area'])
+                # Be more aggressive - if we found half bath indicators in text, convert any small bathroom
+                if smallest_bath['area'] <= 50:  # More lenient threshold
+                    # Remove from regular bathrooms
+                    data['rooms']['bathroom'] = [r for r in data['rooms']['bathroom'] if r != smallest_bath]
+                    
+                    # Add as half bath
                     if 'half_bath' not in data['rooms']:
                         data['rooms']['half_bath'] = []
                     data['rooms']['half_bath'].append({
                         'name': 'HALF BATH',
-                        'area': area_val,
+                        'area': smallest_bath['area'],
                         'type': 'half_bath'
                     })
-                    self.logger.info(f"Found room: HALF BATH = {area_val} sqft")
+                    self.logger.info(f"Converted small bathroom ({smallest_bath['area']} sqft) to HALF BATH")
+                    
+                    # If we have multiple small bathrooms and found half bath indicators, convert another one
+                    remaining_small = [r for r in small_bathroom_areas if r != smallest_bath and 15 <= r['area'] <= 45]
+                    if remaining_small and len(half_bath_indicators) > 5:  # Multiple half bath indicators
+                        second_smallest = min(remaining_small, key=lambda x: x['area'])
+                        # Remove from regular bathrooms
+                        data['rooms']['bathroom'] = [r for r in data['rooms']['bathroom'] if r != second_smallest]
+                        
+                        # Add as half bath
+                        data['rooms']['half_bath'].append({
+                            'name': 'HALF BATH',
+                            'area': second_smallest['area'],
+                            'type': 'half_bath'
+                        })
+                        self.logger.info(f"Converted second small bathroom ({second_smallest['area']} sqft) to HALF BATH")
+        
+
         
         # Look for kitchen patterns
         kitchen_patterns = re.findall(r'KITCHEN\s+(\d+)', text, re.IGNORECASE)
@@ -538,7 +634,7 @@ class TesseractTakeoffExtractor:
                     self.logger.info(f"Found room: UTILITY ROOM = {area_val} sqft")
     
     def _extract_dimensions(self, text: str, data: Dict):
-        """Extract dimensional data with better patterns"""
+        """Extract dimensional data with better patterns for construction plans"""
         # Wall dimension patterns (looking for wall lengths)
         wall_patterns = re.findall(r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)', text)
         for wall in wall_patterns:
@@ -547,19 +643,40 @@ class TesseractTakeoffExtractor:
             if 5 <= wall_length <= 100:
                 data['wall_lengths'].append(wall_length)
         
-        # Room dimension patterns (width x length)
+        # Enhanced room dimension patterns for construction plans
         dimension_patterns = [
+            # Standard "width x length" patterns
             r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)',
+            # Patterns with "=" sign (common in construction plans)
+            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*=\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)',
+            # Patterns with spaces around dimensions
+            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s+[xX×]\s+(\d+[\'\"]?\s*-\s*\d+[\'\"]?)',
+            # Simple number patterns (for basic dimensions)
+            r'(\d+)\s*[xX×]\s*(\d+)',
+            # Patterns with feet and inches
+            r'(\d+[\'\"])\s*[xX×]\s*(\d+[\'\"]?)',
+            # Patterns with mixed formats
+            r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+)',
+            r'(\d+)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)',
+            # Look for patterns with quotes and inches
+            r'(\d+[\'\"])\s*[xX×]\s*(\d+[\'\"]?)',
+            # Look for patterns with just numbers and x
+            r'(\d+)\s*[xX×]\s*(\d+)',
+            # Look for patterns with feet-inches format
             r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)'
         ]
         
-        for pattern in dimension_patterns:
+        total_matches = 0
+        for i, pattern in enumerate(dimension_patterns):
             matches = re.findall(pattern, text, re.IGNORECASE)
+            total_matches += len(matches)
+            self.logger.debug(f"Pattern {i+1}: Found {len(matches)} matches")
+            
             for match in matches:
                 width, length = match
                 width_ft = self._convert_to_feet(width)
                 length_ft = self._convert_to_feet(length)
-                # Only add reasonable room dimensions
+                # Only add reasonable room dimensions (5-50 feet is typical for rooms)
                 if 5 <= width_ft <= 50 and 5 <= length_ft <= 50:
                     data['dimensions'].append({
                         'width': width,
@@ -568,6 +685,57 @@ class TesseractTakeoffExtractor:
                         'length_ft': length_ft,
                         'area_sqft': width_ft * length_ft
                     })
+                    self.logger.info(f"Found dimension: {width} x {length} = {width_ft:.1f}' x {length_ft:.1f}' = {width_ft * length_ft:.0f} sqft")
+        
+        self.logger.info(f"Total dimension pattern matches found: {total_matches}")
+        
+        # Also look for standalone dimension strings that might be room dimensions
+        # Look for patterns like "12' - 6" x 15' - 0"" or "12' x 15'"
+        standalone_dimensions = re.findall(r'(\d+[\'\"]?\s*-\s*\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?\s*-\s*\d+[\'\"]?)', text)
+        for dim in standalone_dimensions:
+            width, length = dim
+            width_ft = self._convert_to_feet(width)
+            length_ft = self._convert_to_feet(length)
+            if 5 <= width_ft <= 50 and 5 <= length_ft <= 50:
+                # Check if we already have this dimension
+                existing = any(
+                    abs(d['width_ft'] - width_ft) < 0.1 and abs(d['length_ft'] - length_ft) < 0.1
+                    for d in data['dimensions']
+                )
+                if not existing:
+                    data['dimensions'].append({
+                        'width': width,
+                        'length': length,
+                        'width_ft': width_ft,
+                        'length_ft': length_ft,
+                        'area_sqft': width_ft * length_ft
+                    })
+                    self.logger.info(f"Found standalone dimension: {width} x {length} = {width_ft:.1f}' x {length_ft:.1f}' = {width_ft * length_ft:.0f} sqft")
+        
+        # Look for any remaining dimension-like patterns in the text
+        # This is a fallback to catch patterns we might have missed
+        all_dimension_like = re.findall(r'(\d+[\'\"]?)\s*[xX×]\s*(\d+[\'\"]?)', text)
+        self.logger.info(f"Found {len(all_dimension_like)} total dimension-like patterns in text")
+        
+        for dim in all_dimension_like:
+            width, length = dim
+            width_ft = self._convert_to_feet(width)
+            length_ft = self._convert_to_feet(length)
+            if 3 <= width_ft <= 60 and 3 <= length_ft <= 60:  # More lenient range
+                # Check if we already have this dimension
+                existing = any(
+                    abs(d['width_ft'] - width_ft) < 0.1 and abs(d['length_ft'] - length_ft) < 0.1
+                    for d in data['dimensions']
+                )
+                if not existing:
+                    data['dimensions'].append({
+                        'width': width,
+                        'length': length,
+                        'width_ft': width_ft,
+                        'length_ft': length_ft,
+                        'area_sqft': width_ft * length_ft
+                    })
+                    self.logger.info(f"Found fallback dimension: {width} x {length} = {width_ft:.1f}' x {length_ft:.1f}' = {width_ft * length_ft:.0f} sqft")
     
     def _convert_to_feet(self, dimension_str: str) -> float:
         """Convert dimension string to feet"""
@@ -761,17 +929,19 @@ class TesseractTakeoffExtractor:
             return 'other'
     
     def save_results(self, data: Dict, output_file: str = None):
-        """Save extraction results to JSON file"""
+        """Save extraction results to JSON file with timestamp"""
         if output_file is None:
-            # Save results to JSON file in output directory
+            # Save results to JSON file in output directory with timestamp
             output_dir = Path("output")
             output_dir.mkdir(exist_ok=True)
-            output_file = output_dir / f"tesseract_extraction_{self.pdf_path.stem}.json"
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = output_dir / f"tesseract_extraction_{self.pdf_path.stem}_{timestamp}.json"
         
         with open(output_file, 'w') as f:
             json.dump(data, f, indent=2)
         
-        self.logger.info(f"Results saved to: {output_file}")
+        with self.lock:
+            self.logger.info(f"Results saved to: {output_file}")
         return output_file
     
     def print_summary(self, data: Dict):
@@ -817,15 +987,12 @@ class TesseractTakeoffExtractor:
         
         print("="*60)
 
-def main():
-    """Main function to run the Tesseract takeoff extraction"""
-    pdf_path = "plans/9339_lavendar_approved_plans.pdf"
-    
-    if not Path(pdf_path).exists():
-        print(f"Error: PDF file not found: {pdf_path}")
-        return
-    
+def process_single_pdf(pdf_path: str) -> Dict:
+    """Process a single PDF and return results"""
     try:
+        print(f"\n🚀 Starting extraction for: {Path(pdf_path).name}")
+        start_time = time.time()
+        
         # Initialize extractor
         extractor = TesseractTakeoffExtractor(pdf_path)
         
@@ -838,12 +1005,217 @@ def main():
         # Save results
         output_file = extractor.save_results(construction_data)
         
-        print(f"\n✅ Tesseract extraction completed successfully!")
+        end_time = time.time()
+        processing_time = end_time - start_time
+        
+        result = {
+            'pdf_path': pdf_path,
+            'output_file': str(output_file),
+            'success': True,
+            'processing_time': processing_time,
+            'data': construction_data
+        }
+        
+        print(f"\n✅ Completed {Path(pdf_path).name} in {processing_time:.1f} seconds")
         print(f"📄 Results saved to: {output_file}")
         
+        return result
+        
     except Exception as e:
-        print(f"❌ Error during extraction: {e}")
-        logging.error(f"Extraction failed: {e}", exc_info=True)
+        error_msg = f"❌ Error processing {Path(pdf_path).name}: {e}"
+        print(error_msg)
+        logging.error(f"Processing failed for {pdf_path}: {e}", exc_info=True)
+        
+        return {
+            'pdf_path': pdf_path,
+            'output_file': None,
+            'success': False,
+            'error': str(e),
+            'processing_time': 0
+        }
+
+def process_all_pdfs():
+    """Process all PDFs in the plans directory in parallel"""
+    plans_dir = Path("plans")
+    
+    if not plans_dir.exists():
+        print(f"Error: Plans directory not found: {plans_dir}")
+        return False
+    
+    # Find all PDF files in the plans directory
+    pdf_files = list(plans_dir.glob("*.pdf"))
+    
+    if not pdf_files:
+        print(f"No PDF files found in {plans_dir}")
+        return False
+    
+    print(f"📁 Found {len(pdf_files)} PDF files to process:")
+    for pdf_file in pdf_files:
+        print(f"  - {pdf_file.name}")
+    
+    # Process PDFs in parallel (2 at a time)
+    max_workers = 2
+    results = []
+    
+    print(f"\n🚀 Starting parallel processing with {max_workers} workers...")
+    overall_start_time = time.time()
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_pdf = {
+            executor.submit(process_single_pdf, str(pdf_file)): pdf_file 
+            for pdf_file in pdf_files
+        }
+        
+        # Collect results as they complete
+        for future in concurrent.futures.as_completed(future_to_pdf):
+            pdf_file = future_to_pdf[future]
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                print(f"❌ Exception processing {pdf_file.name}: {e}")
+                results.append({
+                    'pdf_path': str(pdf_file),
+                    'output_file': None,
+                    'success': False,
+                    'error': str(e),
+                    'processing_time': 0
+                })
+    
+    overall_end_time = time.time()
+    total_time = overall_end_time - overall_start_time
+    
+    # Print summary
+    print(f"\n{'='*80}")
+    print("PARALLEL PROCESSING SUMMARY")
+    print(f"{'='*80}")
+    print(f"Total PDFs processed: {len(pdf_files)}")
+    print(f"Successful extractions: {sum(1 for r in results if r['success'])}")
+    print(f"Failed extractions: {sum(1 for r in results if not r['success'])}")
+    print(f"Total processing time: {total_time:.1f} seconds")
+    print(f"Average time per PDF: {total_time/len(pdf_files):.1f} seconds")
+    
+    print(f"\n📊 Individual Results:")
+    for result in results:
+        pdf_name = Path(result['pdf_path']).name
+        if result['success']:
+            print(f"  ✅ {pdf_name}: {result['processing_time']:.1f}s -> {Path(result['output_file']).name}")
+        else:
+            print(f"  ❌ {pdf_name}: FAILED - {result.get('error', 'Unknown error')}")
+    
+    print(f"\n🎉 Parallel processing completed!")
+    
+    # Save batch results summary
+    batch_summary = {
+        'batch_timestamp': datetime.now().isoformat(),
+        'total_pdfs': len(pdf_files),
+        'successful': sum(1 for r in results if r['success']),
+        'failed': sum(1 for r in results if not r['success']),
+        'total_time_seconds': total_time,
+        'average_time_per_pdf': total_time/len(pdf_files),
+        'results': results
+    }
+    
+    output_dir = Path("output")
+    output_dir.mkdir(exist_ok=True)
+    batch_file = output_dir / f"batch_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    
+    with open(batch_file, 'w') as f:
+        json.dump(batch_summary, f, indent=2)
+    
+    print(f"📄 Batch summary saved to: {batch_file}")
+    return True
+
+def process_single_default_pdf():
+    """Process the default PDF file"""
+    default_pdf = "plans/9339_lavendar_approved_plans.pdf"
+    
+    if not Path(default_pdf).exists():
+        print(f"Error: Default PDF file not found: {default_pdf}")
+        return False
+    
+    print(f"📄 Processing default PDF: {Path(default_pdf).name}")
+    
+    result = process_single_pdf(default_pdf)
+    
+    if result['success']:
+        print(f"\n🎉 Single PDF processing completed successfully!")
+        return True
+    else:
+        print(f"\n❌ Single PDF processing failed: {result.get('error', 'Unknown error')}")
+        return False
+
+def main():
+    """Main function with CLI argument parsing"""
+    parser = argparse.ArgumentParser(
+        description="Tesseract-Based Construction Plans Takeoff Estimator",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python tesseract_takeoff.py                    # Process all PDFs in plans/ directory
+  python tesseract_takeoff.py --all             # Process all PDFs in plans/ directory
+  python tesseract_takeoff.py --default         # Process only the default PDF
+  python tesseract_takeoff.py --file my_plan.pdf # Process a specific PDF file
+        """
+    )
+    
+    # Create mutually exclusive group for processing options
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        '--all', 
+        action='store_true', 
+        help='Process all PDF files in the plans/ directory (default behavior)'
+    )
+    group.add_argument(
+        '--default', 
+        action='store_true', 
+        help='Process only the default PDF (9339_lavendar_approved_plans.pdf)'
+    )
+    group.add_argument(
+        '--file', 
+        type=str, 
+        metavar='PDF_PATH',
+        help='Process a specific PDF file (provide full path)'
+    )
+    
+    parser.add_argument(
+        '--workers', 
+        type=int, 
+        default=2, 
+        metavar='N',
+        help='Number of parallel workers for processing multiple PDFs (default: 2)'
+    )
+    
+    parser.add_argument(
+        '--verbose', '-v', 
+        action='store_true', 
+        help='Enable verbose logging output'
+    )
+    
+    args = parser.parse_args()
+    
+    # Set logging level based on verbose flag
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+    
+    # Determine which processing mode to use
+    if args.default:
+        print("🔧 Mode: Processing default PDF only")
+        success = process_single_default_pdf()
+    elif args.file:
+        print(f"🔧 Mode: Processing specific file: {args.file}")
+        if not Path(args.file).exists():
+            print(f"Error: File not found: {args.file}")
+            sys.exit(1)
+        result = process_single_pdf(args.file)
+        success = result['success']
+    else:
+        print("🔧 Mode: Processing all PDFs in plans/ directory")
+        success = process_all_pdfs()
+    
+    # Exit with appropriate code
+    sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
     main()
