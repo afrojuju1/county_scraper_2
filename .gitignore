@@ -42,6 +42,7 @@ ENV/
 env.bak/
 venv.bak/
 .python-version
+takeoff_env/
 
 # IDEs
 .vscode/
