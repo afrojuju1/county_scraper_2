@@ -763,7 +763,10 @@ class TesseractTakeoffExtractor:
     def save_results(self, data: Dict, output_file: str = None):
         """Save extraction results to JSON file"""
         if output_file is None:
-            output_file = f"tesseract_extraction_{self.pdf_path.stem}.json"
+            # Save results to JSON file in output directory
+            output_dir = Path("output")
+            output_dir.mkdir(exist_ok=True)
+            output_file = output_dir / f"tesseract_extraction_{self.pdf_path.stem}.json"
         
         with open(output_file, 'w') as f:
             json.dump(data, f, indent=2)
@@ -816,7 +819,7 @@ class TesseractTakeoffExtractor:
 
 def main():
     """Main function to run the Tesseract takeoff extraction"""
-    pdf_path = "9339_lavendar_approved_plans.pdf"
+    pdf_path = "plans/9339_lavendar_approved_plans.pdf"
     
     if not Path(pdf_path).exists():
         print(f"Error: PDF file not found: {pdf_path}")
